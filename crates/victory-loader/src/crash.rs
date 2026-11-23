@@ -148,7 +148,23 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
             return false;
         }
         let code = context.Rip as *const u8;
-        match code.cast::<[u8; 3]>().read_unaligned() {
+        let prefix = code.cast::<[u8; 3]>().read_unaligned();
+        // CLFLUSH writes the line to memory on a host that lacks CLWB.
+        let modrm_at = match prefix {
+            [0x66, 0x0f, 0xae] => Some((3, 0)),
+            [0x66, rex @ 0x40..=0x4f, 0x0f] if rex & 4 == 0 && code.add(3).read() == 0xae => {
+                Some((4, rex))
+            }
+            _ => None,
+        };
+        if let Some((at, rex)) = modrm_at
+            && let Some(address) = clwb_base(context, code.add(at).read(), rex)
+        {
+            std::arch::x86_64::_mm_clflush(address as *const u8);
+            context.Rip += (at + 1) as u64;
+            return true;
+        }
+        match prefix {
             [0x0f, 0x01, 0xfc] => ((context.Rax & !63) as *mut u8).write_bytes(0, 64),
             [0x0f, 0x01, 0xfa] => {}
             [0x0f, 0x01, 0xfb] => std::thread::yield_now(),
@@ -163,6 +179,29 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
         context.Rip += 3;
     }
     true
+}
+
+/// Decodes CLWB /6 with mod=00 and a plain base register. SIB addresses,
+/// RIP-relative addresses, displacements and register operands are separate forms.
+fn clwb_base(context: &CONTEXT, modrm: u8, rex: u8) -> Option<u64> {
+    if modrm & 0xf8 != 0x30 {
+        return None;
+    }
+    match (modrm & 7) | ((rex & 1) << 3) {
+        0 => Some(context.Rax),
+        1 => Some(context.Rcx),
+        2 => Some(context.Rdx),
+        3 => Some(context.Rbx),
+        6 => Some(context.Rsi),
+        7 => Some(context.Rdi),
+        8 => Some(context.R8),
+        9 => Some(context.R9),
+        10 => Some(context.R10),
+        11 => Some(context.R11),
+        14 => Some(context.R14),
+        15 => Some(context.R15),
+        _ => None,
+    }
 }
 
 /// SSE4a's `extrq`/`insertq` (register forms, the only ones there are) on
@@ -435,6 +474,24 @@ mod tests {
     use windows_sys::Win32::System::Diagnostics::Debug::{
         RtlCaptureContext, RtlCaptureStackBackTrace,
     };
+
+    #[test]
+    fn clwb_plain_base_registers() {
+        // SAFETY: a zeroed CONTEXT is valid; only its integer fields are read.
+        let mut c: CONTEXT = unsafe { std::mem::zeroed() };
+        c.Rax = 123;
+        c.Rcx = 456;
+        c.R9 = 789;
+        c.R15 = 987;
+        assert_eq!(clwb_base(&c, 0x30, 0), Some(123));
+        assert_eq!(clwb_base(&c, 0x31, 0), Some(456));
+        assert_eq!(clwb_base(&c, 0x31, 0x41), Some(789));
+        assert_eq!(clwb_base(&c, 0x37, 0x41), Some(987));
+        for modrm in [0x34, 0x35, 0x38, 0x70, 0xb0, 0xf0] {
+            assert_eq!(clwb_base(&c, modrm, 0), None);
+            assert_eq!(clwb_base(&c, modrm, 0x41), None);
+        }
+    }
 
     #[test]
     #[inline(never)]

@@ -20,11 +20,18 @@ pub fn run(
     victory_hle::modules::lifecycle::wait_for_previous();
     let cfg = victory_core::Config::load()?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
-    let prepared = victory_loader::prepare(&original)?;
+    let mut prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
     match victory_game::identify(&hash) {
         Some(build) => println!("build          {} ({hash})", build.label),
         None => println!("build          unknown ({hash})"),
+    }
+
+    let writebacks = victory_game::cache_writeback::translate(&hash, &mut prepared.bytes, |rva| {
+        prepared.info.rva_to_file_offset(rva)
+    });
+    if writebacks > 0 {
+        println!("CPU            {writebacks} writeback loops translated to CLFLUSHOPT");
     }
 
     let images = cfg.cache_subdir("images")?;

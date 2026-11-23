@@ -3,6 +3,14 @@
 //! Every command reads the user's own files and writes only to stdout or to
 //! the user's cache directory (outside the repository).
 
+#[cfg(all(windows, feature = "agility"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKVersion: u32 = 620;
+
+#[cfg(all(windows, feature = "agility"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
+
 mod census;
 mod inspect;
 mod run;
