@@ -1130,6 +1130,10 @@ mod host {
     #[derive(Default)]
     pub(super) struct Host {
         empty_until: [Option<Instant>; PADS],
+        #[cfg(feature = "diagnostics")]
+        held_command: Option<(u8, Instant)>,
+        #[cfg(feature = "diagnostics")]
+        next_command_poll: Option<Instant>,
     }
 
     impl Source for Host {
@@ -1149,7 +1153,7 @@ mod host {
 
         fn keys(&mut self) -> Vec<KeyState> {
             #[cfg(feature = "diagnostics")]
-            let mut down = scripted();
+            let mut down = scripted(self);
             #[cfg(not(feature = "diagnostics"))]
             let mut down = Vec::new();
             if focused() {
@@ -1189,25 +1193,12 @@ mod host {
     /// letter, a digit, or `Enter`, `Esc`, `Tab`, `Back`, `Up`, `Down`,
     /// `Left`, `Right` (the stand-in pad's table maps them to buttons).
     #[cfg(feature = "diagnostics")]
-    fn scripted() -> Vec<u8> {
+    fn scripted(host: &mut Host) -> Vec<u8> {
         static SCRIPT: LazyLock<(Instant, Vec<(Duration, u8)>)> = LazyLock::new(|| {
             let list = std::env::var("VICTORY_KEYS").unwrap_or_default();
             let keys = list.split(',').filter_map(|entry| {
                 let (at, key) = entry.split_once(':')?;
-                let vk = match key.trim() {
-                    "Enter" => 0x0D,
-                    "Esc" => 0x1B,
-                    "Tab" => 0x09,
-                    "Back" => 0x08,
-                    "Up" => 0x26,
-                    "Down" => 0x28,
-                    "Left" => 0x25,
-                    "Right" => 0x27,
-                    k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => {
-                        k.as_bytes()[0].to_ascii_uppercase()
-                    }
-                    _ => return None,
-                };
+                let vk = virtual_key(key)?;
                 Some((
                     Duration::try_from_secs_f64(at.trim().parse().ok()?).ok()?,
                     vk,
@@ -1217,10 +1208,74 @@ mod host {
         });
         let (start, keys) = &*SCRIPT;
         let now = start.elapsed();
-        keys.iter()
+        let mut down: Vec<_> = keys
+            .iter()
             .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
             .map(|&(_, vk)| vk)
-            .collect()
+            .collect();
+        if let Some(vk) = command_key(host)
+            && !down.contains(&vk)
+        {
+            down.push(vk);
+        }
+        down
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn virtual_key(key: &str) -> Option<u8> {
+        Some(match key.trim() {
+            "Enter" => 0x0D,
+            "Esc" => 0x1B,
+            "Tab" => 0x09,
+            "Back" => 0x08,
+            "Up" => 0x26,
+            "Down" => 0x28,
+            "Left" => 0x25,
+            "Right" => 0x27,
+            k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => {
+                k.as_bytes()[0].to_ascii_uppercase()
+            }
+            _ => return None,
+        })
+    }
+
+    /// The harness atomically renames a file containing one key to the
+    /// configured path. An exclusive delete-on-close read consumes it once.
+    #[cfg(feature = "diagnostics")]
+    fn command_key(host: &mut Host) -> Option<u8> {
+        use std::fs::OpenOptions;
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::path::PathBuf;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_DELETE_ON_CLOSE;
+
+        static PATH: LazyLock<Option<PathBuf>> =
+            LazyLock::new(|| std::env::var_os("VICTORY_KEY_FILE").map(PathBuf::from));
+        let path = PATH.as_ref()?;
+        let now = Instant::now();
+        if let Some((vk, until)) = host.held_command {
+            if now < until {
+                return Some(vk);
+            }
+            host.held_command = None;
+            host.next_command_poll = Some(now + Duration::from_millis(50));
+        }
+        if host.next_command_poll.is_some_and(|at| now < at) {
+            return None;
+        }
+        host.next_command_poll = Some(now + Duration::from_millis(50));
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+            .open(path)
+            .ok()?;
+        let mut value = String::new();
+        file.take(32).read_to_string(&mut value).ok()?;
+        let vk = virtual_key(&value)?;
+        tracing::info!(key = %value.trim(), "diagnostic key");
+        host.held_command = Some((vk, now + Duration::from_millis(250)));
+        Some(vk)
     }
 
     /// The foreground window is one of ours (the title's or our fallback).
