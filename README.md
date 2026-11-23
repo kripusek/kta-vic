@@ -1,48 +1,31 @@
-# VIctory
+# VI Causeway
 
-Runs Grand Theft Auto VI (Xbox Series X|S) natively on Windows, from files
-the user supplies.
+VI Causeway is an experimental Windows compatibility layer for the Xbox Series X|S version of Grand Theft Auto VI. It runs the game's x86-64 code on the host CPU, implements the Xbox services the game calls, and translates its graphics commands and shaders for Direct3D 12. You supply your own game files. It builds on the work of Marvisak and the VIctory contributors. [Upstream project](https://github.com/Marvisak/VIctory)
 
-The title's x86-64 code runs unchanged inside our process; VIctory supplies
-the platform underneath it and converts the title's data, ahead of time where
-it can and on first use where it must (shaders). See
-[docs/architecture.md](docs/architecture.md).
+## Startup status
 
-## Status (2026-11-23)
+On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally and began loading the story. On the first world frames it exited with a null write before the pause menu appeared.
 
-**Not playable yet.** The title boots, runs its menus at its own 30 fps and
-loads the world, where rendering fails.
+Upstream VIctory separately reports reaching the first mission on Windows 11 with a Radeon RX 6700 XT. Its world frames were black and took 1.5–3 seconds to render. [Upstream test results](https://github.com/Marvisak/VIctory/blob/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f/README.md#status-2026-11-23)
 
-| Stage | State |
-|-------|-------|
-| Boot, first-boot screens (accessibility, language, settings, legal) | works, 30 fps |
-| Intro video with sound | works |
-| Start screen, profile and saves | works |
-| Loading into the world (about 50 s) | works |
-| The world (first mission's intro) | reached and runs (two minutes without a GPU failure); the picture is black, 1.5-3 s per frame |
+Upstream reports that entering the world can reset the Windows display driver. The offline profile, opening movie, and first-run screens can be tested before entering the world.
 
-Tested on one machine: Windows 11, AMD RX 6700 XT.
+## Building on Windows 10
 
-> **Warning.** Entering the world on a real GPU can currently hang it, and
-> Windows then resets the display driver (every monitor goes black for a
-> moment). To look further, use a diagnostics build with
-> `VICTORY_D3D12_WARP=1`, which renders on the software adapter.
+Use the x64 MSVC Rust toolchain pinned by this workspace, the Visual Studio C++ Build Tools and a Windows SDK. From the repository root, build the release executable with the Agility feature. For frame capture and other diagnostics, build the diagnostic profile with both features.
 
-What each part does today and what it still needs:
+```powershell
+cargo build --release -p victory --features agility
+cargo build --profile diag -p victory --features diagnostics,agility
+```
 
-| Subsystem | Today | Needs |
-|-----------|-------|-------|
-| Loader | Runs the title's executable and its DLLs in our process; crash reports name the faulting code and are kept in `crashes.log` | – |
-| Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
-| Network | Offline by design: the title cannot reach the network | – |
-| Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
-| Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
-| GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
-| GPU: world | Mesh pipelines, shader-written buffers, descriptor lifetimes, indirect execution (arguments clamped) are in | Frames are black (most geometry is drawn indirectly; untranslated shaders drop the rest); frames take seconds; real queries, depth bounds, HDR and scaling are missing |
-| Shaders | Console GPU code recompiled to DXIL at first use, cached on disk. Menus: all. World: mesh 8,191 of 8,506, vertex/pixel 10,617 of 12,346, compute 1,643 of 2,539 | 64-bit image atomics, merged geometry stages, the ray-tracing builder's shaders; some compute programs need a GPU with 64-lane waves |
-| Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
-| Series S mode | Runs through the menus to the loading screen | The world, as above |
+Download Microsoft's `Microsoft.Direct3D.D3D12` NuGet package version `1.620.2` and open the package as a ZIP archive. Copy `build/native/bin/x64/D3D12Core.dll` into a `D3D12` subdirectory beside each executable you plan to run, such as `target\release\D3D12` or `target\diag\D3D12`. If you enable the Direct3D debug layer, copy the matching `d3d12SDKLayers.dll` into the same directory. [Microsoft Agility SDK package](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.620.2)
+
+## Credits and license
+
+VI Causeway is an independent derivative of VIctory by Marvisak and the VIctory contributors. This project began on 2026-11-23. The starting revision was `1dd7afd`. The imported history retains the original authors and co-author credits. Commit IDs changed where the history was filtered to omit the upstream BCPack table. The compatibility layer is licensed under GPL-3.0-or-later. [Original upstream revision](https://github.com/Marvisak/VIctory/tree/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f) · [License](LICENSE)
+
+Two GPU fixes helped the startup sequence render on NVIDIA hardware. Nostyxx remapped descriptor tables that exceed the host heap limit. Ryx (Ryx69) kept shader resource views stable until the command list resets. [Nostyxx's heap fix](https://github.com/Marvisak/VIctory/pull/21) · [Ryx69's descriptor fix](https://github.com/Marvisak/VIctory/pull/20)
 
 ## Getting started
 
@@ -64,18 +47,17 @@ The file is 77,982 bytes and follows the layout documented by
 `victory_formats::bcpack::Tables::parse`. Builds and synthetic tests run
 without this file.
 
-Run the title:
+Run the title with the executable you built. The executable and configuration retain their upstream names for compatibility.
 
 ```powershell
-cargo build --release -p victory
-target\release\victory.exe run <game dir>\<the title's exe> --execute
+.\target\release\victory.exe run "D:\games\my-dump\game_scarlett_master.exe" --execute
 ```
 
 The window caption shows the framerate. Saves, settings and `crashes.log`
 are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
 data under the cache folder.
 
-Input: XInput pads. With none connected the keyboard is a pad while the
+XInput controllers are supported. With none connected the keyboard is a pad while the
 title's window has focus:
 
 | Keys | Pad |
@@ -130,7 +112,3 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 
 Every build appends crashes and host GPU failures to `crashes.log` in the
 title's data folder.
-
-## License
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).

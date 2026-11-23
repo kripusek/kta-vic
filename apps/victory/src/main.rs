@@ -26,7 +26,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "victory",
     version,
-    about = "Run an Xbox Series title natively on Windows"
+    about = "VI Causeway runs an Xbox Series title natively on Windows"
 )]
 struct Cli {
     #[command(subcommand)]
