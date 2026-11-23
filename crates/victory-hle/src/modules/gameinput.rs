@@ -1130,9 +1130,9 @@ mod host {
     #[derive(Default)]
     pub(super) struct Host {
         empty_until: [Option<Instant>; PADS],
-        #[cfg(feature = "diagnostics")]
+        #[cfg(feature = "input-replay")]
         held_command: Option<(u8, Instant)>,
-        #[cfg(feature = "diagnostics")]
+        #[cfg(feature = "input-replay")]
         next_command_poll: Option<Instant>,
     }
 
@@ -1152,9 +1152,9 @@ mod host {
         }
 
         fn keys(&mut self) -> Vec<KeyState> {
-            #[cfg(feature = "diagnostics")]
+            #[cfg(feature = "input-replay")]
             let mut down = scripted(self);
-            #[cfg(not(feature = "diagnostics"))]
+            #[cfg(not(feature = "input-replay"))]
             let mut down = Vec::new();
             if focused() {
                 // Left/right modifier keys only, as devices report them; no
@@ -1188,11 +1188,11 @@ mod host {
         }
     }
 
-    /// Debugging aid: `VICTORY_KEYS=<seconds>:<key>,...` holds each key for
+    /// `VICTORY_KEYS=<seconds>:<key>,...` holds each key for
     /// 0.2 s that long after input starts, with or without focus. A key is a
     /// letter, a digit, or `Enter`, `Esc`, `Tab`, `Back`, `Up`, `Down`,
     /// `Left`, `Right` (the stand-in pad's table maps them to buttons).
-    #[cfg(feature = "diagnostics")]
+    #[cfg(feature = "input-replay")]
     fn scripted(host: &mut Host) -> Vec<u8> {
         static SCRIPT: LazyLock<(Instant, Vec<(Duration, u8)>)> = LazyLock::new(|| {
             let list = std::env::var("VICTORY_KEYS").unwrap_or_default();
@@ -1221,7 +1221,7 @@ mod host {
         down
     }
 
-    #[cfg(feature = "diagnostics")]
+    #[cfg(feature = "input-replay")]
     fn virtual_key(key: &str) -> Option<u8> {
         Some(match key.trim() {
             "Enter" => 0x0D,
@@ -1241,7 +1241,7 @@ mod host {
 
     /// The harness atomically renames a file containing one key to the
     /// configured path. An exclusive delete-on-close read consumes it once.
-    #[cfg(feature = "diagnostics")]
+    #[cfg(feature = "input-replay")]
     fn command_key(host: &mut Host) -> Option<u8> {
         use std::fs::OpenOptions;
         use std::io::Read;
@@ -1286,6 +1286,14 @@ mod host {
             GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
             process == GetCurrentProcessId()
         }
+    }
+
+    #[cfg(feature = "input-replay")]
+    #[test]
+    fn replay_accepts_named_keys_and_normalizes_letters() {
+        assert_eq!(virtual_key("Enter\n"), Some(0x0D));
+        assert_eq!(virtual_key("z"), Some(b'Z'));
+        assert_eq!(virtual_key("unknown"), None);
     }
 
     #[test]

@@ -48,8 +48,9 @@ windows-core = { workspace = true, optional = true }
 tempfile.workspace = true
 
 [features]
-# Debugging switches (scripted keys and the like).
-diagnostics = ["victory-gpu/diagnostics", "victory-loader/diagnostics", "dep:windows", "dep:windows-core"]
+# Replay GameInput keyboard events using VICTORY_KEYS or VICTORY_KEY_FILE.
+input-replay = []
+diagnostics = ["input-replay", "victory-gpu/diagnostics", "victory-loader/diagnostics", "dep:windows", "dep:windows-core"]
 
 [lints]
 workspace = true

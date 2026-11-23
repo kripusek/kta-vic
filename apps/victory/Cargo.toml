@@ -22,9 +22,11 @@ walkdir.workspace = true
 
 [features]
 agility = []
+input-replay = ["victory-hle/input-replay"]
 # Debug-level logs and the debugging switches (frame capture, stack dumps,
 # the host debug layer, scripted keys). Off in a plain release build.
 diagnostics = [
+    "input-replay",
     "victory-core/diagnostics",
     "victory-hle/diagnostics",
     "victory-loader/diagnostics",
