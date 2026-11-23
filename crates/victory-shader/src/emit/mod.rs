@@ -87,6 +87,8 @@ mod shader;
 #[cfg(windows)]
 pub mod validator;
 mod wave;
+#[cfg(all(test, windows))]
+mod wave_tests;
 
 use crate::dxbc::{Container, FourCC};
 use crate::native::{HwStage, NativeProgram, RootType};
