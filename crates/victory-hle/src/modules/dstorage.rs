@@ -859,7 +859,7 @@ fn inflate(source: &[u8], out: &mut [u8]) -> Result<usize, HRESULT> {
 fn bcpack_tables() -> Result<&'static Tables, HRESULT> {
     static TABLES: OnceLock<Result<Tables, String>> = OnceLock::new();
     static WARNED: AtomicBool = AtomicBool::new(false);
-    match TABLES.get_or_init(load_bcpack_tables) {
+    match TABLES.get_or_init(|| load_bcpack_tables(BCPACK_FILE.get().map(|p| p.as_path()))) {
         Ok(tables) => Ok(tables),
         Err(why) if !WARNED.swap(true, Ordering::Relaxed) => {
             tracing::warn!("dstorage: BCPack requests fail: {why} (more at debug)");
@@ -872,26 +872,24 @@ fn bcpack_tables() -> Result<&'static Tables, HRESULT> {
     }
 }
 
-/// The tables VIctory ships with.
-#[cfg(not(test))]
-fn load_bcpack_tables() -> Result<Tables, String> {
-    Tables::builtin().map_err(|e| format!("the built-in BCPack tables: {e}"))
+static BCPACK_FILE: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Configures the per-process tables before starting a title. The first
+/// BCPack request reads them; ordinary and zlib reads do not need them.
+pub fn use_bcpack_tables(path: std::path::PathBuf) {
+    let _ = BCPACK_FILE.set(path);
 }
 
-/// Tests decode streams made against tables of their own, from this folder.
-#[cfg(test)]
-static BCPACK_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+fn load_bcpack_tables(path: Option<&std::path::Path>) -> Result<Tables, String> {
+    use std::io::Read;
 
-#[cfg(test)]
-fn use_bcpack_tables(dir: std::path::PathBuf) {
-    let _ = BCPACK_DIR.set(dir);
-}
-
-#[cfg(test)]
-fn load_bcpack_tables() -> Result<Tables, String> {
-    let dir = BCPACK_DIR.get().ok_or("no folder set for the test tables")?;
-    let bytes = std::fs::read(dir.join("tables.bin")).map_err(|e| e.to_string())?;
-    Tables::parse(&bytes).map_err(|e| e.to_string())
+    let path = path.ok_or("set [paths].bcpack_tables in victory.toml or VICTORY_BCPACK_TABLES to your BCPack table file")?;
+    let file = std::fs::File::open(path).map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let mut bytes = Vec::with_capacity(bcpack::TABLES_SIZE + 1);
+    file.take(bcpack::TABLES_SIZE as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    Tables::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// A compressed request's source: borrowed from memory, or read from the
@@ -1375,9 +1373,31 @@ mod tests {
             t.extend((0..64u8).map(|v| (v & 7) | (v >> 3) << 4));
             t.resize(bcpack::TABLES_SIZE, 0);
             let dir = tempfile::tempdir().unwrap().keep();
-            std::fs::write(dir.join("tables.bin"), t).unwrap();
-            use_bcpack_tables(dir);
+            let file = dir.join("tables.bin");
+            std::fs::write(&file, t).unwrap();
+            use_bcpack_tables(file);
         });
+    }
+
+    #[test]
+    fn missing_and_invalid_bcpack_tables_report_the_setting_or_file() {
+        assert!(
+            load_bcpack_tables(None)
+                .err()
+                .unwrap()
+                .contains("VICTORY_BCPACK_TABLES")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("missing.bin");
+        assert!(
+            load_bcpack_tables(Some(&file))
+                .err()
+                .unwrap()
+                .contains("missing.bin")
+        );
+        std::fs::write(&file, [0; 4]).unwrap();
+        let error = load_bcpack_tables(Some(&file)).err().unwrap();
+        assert!(error.contains("missing.bin") && error.contains("wrong size"));
     }
 
     /// Two BC4 blocks from the format's test encoder: endpoints 10, -3 with
@@ -1410,7 +1430,10 @@ mod tests {
         let (_dir, file) = file_with(&contents);
         let (queue, array) = (new_queue(0), status_array(1));
         let mut out = [0u8; 16];
-        enqueue(queue, &request(4 << 1, out.as_mut_ptr().cast(), 16, file, 100, 88));
+        enqueue(
+            queue,
+            &request(4 << 1, out.as_mut_ptr().cast(), 16, file, 100, 88),
+        );
         enqueue_status(queue, array, 0);
         void(queue, 0x30);
         assert_eq!(wait(array, 0), S_OK);

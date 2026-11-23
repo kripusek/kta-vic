@@ -10,7 +10,7 @@
 //! dictionary that stands in for blocks -1 to -255) and the residuals of the
 //! endpoints and indices against them. The models, the index rank tables,
 //! the BC7 control codes and the dictionaries are constants of the format,
-//! kept in `bcpack-tables.bin` beside this file ([`Tables::builtin`]).
+//! supplied by the caller to [`Tables::parse`].
 
 use std::fmt;
 
@@ -114,11 +114,6 @@ impl Reader<'_> {
 }
 
 impl Tables {
-    /// The tables VIctory ships with.
-    pub fn builtin() -> Result<Tables, Error> {
-        Tables::parse(include_bytes!("bcpack-tables.bin"))
-    }
-
     /// Reads the table file: 128 x 9 u16 model frequencies (per bucket, the
     /// frequency of each of its symbols), the rank tables (BC1 256 B, BC3
     /// alpha 64 B and colour 256 B, BC4 64 B, BC5 64 B), 512 u16 BC7 control
@@ -1142,11 +1137,6 @@ fn bc6<'a>(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_shipped_tables_parse() {
-        assert!(super::Tables::builtin().is_ok());
-    }
-
     use super::*;
 
     /// Tables we made: uniform models, identity ranks, a BC7 code per mode,

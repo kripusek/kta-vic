@@ -7,6 +7,10 @@
 # Your own dump of Grand Theft Auto VI.     env: VICTORY_GAME_DIR
 game_dir = 'D:\victory-data\game'
 
+# Complete decoder table file used when a title reads BCPack texture data.
+# env: VICTORY_BCPACK_TABLES
+# bcpack_tables = 'D:\victory-data\bcpack-tables.bin'
+
 # Derived data. Default: %LOCALAPPDATA%\victory\cache.   env: VICTORY_CACHE_DIR
 # cache_dir = 'D:\victory-data\cache'
 

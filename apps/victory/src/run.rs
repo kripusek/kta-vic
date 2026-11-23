@@ -36,6 +36,10 @@ pub fn run(
 
     let images = cfg.cache_subdir("images")?;
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
+    if let Some(path) = &cfg.bcpack_tables {
+        victory_core::ensure_outside_repo(path)?;
+        victory_hle::modules::dstorage::use_bcpack_tables(path.clone());
+    }
     let image = victory_loader::load(&prepared, &images)?;
     victory_hle::runtime::set_main_image(image.base());
     victory_hle::runtime::set_image_path(image.base(), exe);

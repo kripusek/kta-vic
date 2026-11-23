@@ -15,6 +15,8 @@ use crate::policy::ensure_outside_repo;
 pub struct Config {
     /// The user's dump of Grand Theft Auto VI.
     pub game_dir: Option<PathBuf>,
+    /// File containing the complete BCPack decoder tables, when supplied.
+    pub bcpack_tables: Option<PathBuf>,
     /// Root for all derived data. Always outside the repository.
     pub cache_dir: PathBuf,
     /// What titles write and must keep (persistent local storage). Never
@@ -37,6 +39,7 @@ struct FileConfig {
 #[serde(deny_unknown_fields)]
 struct FilePaths {
     game_dir: Option<PathBuf>,
+    bcpack_tables: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
     data_dir: Option<PathBuf>,
     #[serde(default)]
@@ -93,6 +96,7 @@ impl Config {
             .map_or_else(|| default_dir("data"), Ok)?;
         Ok(Config {
             game_dir: env_path("VICTORY_GAME_DIR").or(file.game_dir),
+            bcpack_tables: env_path("VICTORY_BCPACK_TABLES").or(file.bcpack_tables),
             cache_dir,
             data_dir,
             test_titles,
@@ -163,6 +167,33 @@ mod tests {
         let env = |k: &str| (k == "VICTORY_GAME_DIR").then(OsString::new);
         let cfg = Config::resolve(file, None, env).unwrap();
         assert_eq!(cfg.game_dir.unwrap(), PathBuf::from("from-file"));
+    }
+
+    #[test]
+    fn bcpack_table_path_is_optional_and_can_be_overridden() {
+        let file = || {
+            toml::from_str::<FileConfig>("[paths]\nbcpack_tables = 'local.bin'")
+                .unwrap()
+                .paths
+        };
+        assert!(
+            Config::resolve(FilePaths::default(), None, |_| None)
+                .unwrap()
+                .bcpack_tables
+                .is_none()
+        );
+        assert_eq!(
+            Config::resolve(file(), None, |_| None)
+                .unwrap()
+                .bcpack_tables,
+            Some("local.bin".into())
+        );
+        let env =
+            |key: &str| (key == "VICTORY_BCPACK_TABLES").then(|| OsString::from("override.bin"));
+        assert_eq!(
+            Config::resolve(file(), None, env).unwrap().bcpack_tables,
+            Some("override.bin".into())
+        );
     }
 
     #[test]

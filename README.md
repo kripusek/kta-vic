@@ -57,6 +57,13 @@ cargo test --workspace                   # needs no game data
 cargo run -p victory -- config           # check your paths
 ```
 
+For a title that reads BCPack-compressed textures, set `[paths].bcpack_tables`
+in `victory.toml` to your complete BCPack decoder table file outside the
+repository. You can override that path with `VICTORY_BCPACK_TABLES`.
+The file is 77,982 bytes and follows the layout documented by
+`victory_formats::bcpack::Tables::parse`. Builds and synthetic tests run
+without this file.
+
 Run the title:
 
 ```powershell
