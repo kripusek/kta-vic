@@ -1030,6 +1030,16 @@ mod tests {
             WinHttpGetProxyForUrlEx(null, name.as_ptr(), std::ptr::null(), 0),
             ERROR_WINHTTP_AUTODETECTION_FAILED
         );
+        // Windows 10 lacks this WinHTTP export. The title still gets our
+        // offline implementation, which never consults the host's proxy settings.
+        assert_eq!(
+            crate::registry::lookup("winhttp.dll", "WinHttpGetProxySettingsEx"),
+            Some(WinHttpGetProxySettingsEx as *const () as usize)
+        );
+        assert_eq!(
+            WinHttpGetProxySettingsEx(null, 0, std::ptr::null(), 0),
+            ERROR_WINHTTP_AUTODETECTION_FAILED
+        );
 
         // The ordinals we override name the functions they stand for.
         let m = module();
@@ -1048,8 +1058,12 @@ mod tests {
                 named.name
             );
         }
-        // Every override names a real export of its DLL.
-        for e in m.exports.iter().filter(|e| !e.name.starts_with('#')) {
+        // All other named overrides are present on every supported host.
+        for e in m
+            .exports
+            .iter()
+            .filter(|e| !e.name.starts_with('#') && e.name != "WinHttpGetProxySettingsEx")
+        {
             let dll = if e.name.starts_with("WinHttp") {
                 "winhttp.dll"
             } else {
