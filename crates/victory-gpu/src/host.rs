@@ -332,12 +332,13 @@ pub(crate) fn dred_on() -> bool {
 }
 
 /// Whether each list of a submission runs and is timed on its own, slow
-/// ones logged with their commands (`VICTORY_GPU_TIMING`, diagnostics
-/// builds; the commands are noted with `VICTORY_D3D12_DRED` on).
-#[cfg(feature = "diagnostics")]
+/// ones logged with their commands (`VICTORY_GPU_TIMING`).
 fn timing() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_GPU_TIMING").is_some())
+    *ON.get_or_init(|| {
+        std::env::var_os("VICTORY_GPU_TIMING").is_some()
+            || std::env::var_os("VICTORY_SAFE_SUBMIT").is_some()
+    })
 }
 
 /// Names a host object for the device-removed report, which names the
@@ -509,8 +510,7 @@ impl Host {
         }
         batch.flush();
         let prepared = std::time::Instant::now();
-        // Diagnostics: each list on its own, timed (`VICTORY_GPU_TIMING`).
-        #[cfg(feature = "diagnostics")]
+        // Each list on its own, timed (`VICTORY_GPU_TIMING`) to prevent GPU TDR reset.
         let groups: Vec<&[Option<ID3D12CommandList>]> = if timing() {
             firsts
                 .iter()
@@ -520,8 +520,6 @@ impl Host {
         } else {
             vec![&lists[..]]
         };
-        #[cfg(not(feature = "diagnostics"))]
-        let groups = [&lists[..]];
         for (i, group) in groups.iter().enumerate() {
             *submitted += 1;
             let started = std::time::Instant::now();
@@ -1942,7 +1940,7 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
             bottom: height as i32,
         };
         AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false)?;
-        CreateWindowExW(
+        let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
             w!("VIctory"),
@@ -1955,7 +1953,11 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
             None,
             Some(instance.into()),
             None,
-        )
+        )?;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        Ok(hwnd)
     }
 }
 
