@@ -130,3 +130,18 @@ title's data folder.
 VI Causeway started on November 23, 2026 as an independent derivative of Marvisak's VIctory at `1dd7afd`. The imported history preserves author and co-author credits. Filtering out the upstream BCPack table changed the affected commit IDs. The compatibility layer uses GPL-3.0-or-later. [Original revision](https://github.com/Marvisak/VIctory/tree/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f) · [License](LICENSE) · [How we bring in upstream changes](docs/upstream.md)
 
 Two upstream fixes helped startup on NVIDIA. Nostyxx remapped descriptor tables that exceeded the host heap limit. Ryx (Ryx69) kept shader resource views stable until command-list reset. [Nostyxx's heap fix](https://github.com/Marvisak/VIctory/pull/21) · [Ryx69's descriptor fix](https://github.com/Marvisak/VIctory/pull/20)
+
+## Dodane źródła, forki i integracje (`clean-base-v2`)
+
+### Zewnętrzne repozytoria i forki
+- **ZigZagBoi1/ScarlettPort**: `https://github.com/ZigZagBoi1/ScarlettPort` (remote `scarlettport`, lokalnie `e:\gta6\ScarlettPort`) — stos `runtime/victory` + D3D12 Agility SDK 1.614.1, tryb `VICTORY_FALLBACK_LIGHT=1` (oświetlenie zastępcze otwartego świata na RTX 3060), `-DebugView` oraz `-AutoInput`.
+- **fxceless/victory-fork**: `https://github.com/fxceless/victory-fork` (remote `victoryfork`) — m.in. poprawka `e9765a7` wyłączająca domyślnie `VICTORY_WAVE_WIDE` (eliminacja device loss na `ptfx_CS_lightAtlas`).
+- **igvcc/luacias**: `https://github.com/igvcc/luacias` (lokalnie `e:\gta6\luacias`) — baza `v0.2.0-preview`, dokumentacja i optymalizacje VRAM/LDS.
+- **Marvisak/VIctory**: `https://github.com/Marvisak/VIctory` (remote `upstream`) — zintegrowane PR-y na `clean-base-v2`: `#93` (BCPack lookup), `#706` (`cmp_lg_ordered`), `#654` (`uav-describe`), `#681` (`vertex-buffer-null-unbind`).
+- **ifBars/VICauseway**: `https://github.com/ifBars/VICauseway` (remote `causeway`) — baza poranna `606a81b` + poprawki `8a05317`, `180ebb0`, `f681ba3` oraz PR-y `#360`, `#367`, `#368`, `#369`, `#1070`.
+
+### Launcher i narzędzia lokalne (`e:\gta6\`)
+- `e:\gta6\kripus_launcher.ps1` — główny launcher GUI (profile VIctory/Causeway, Tryb Diagnostyczny, ScarlettPort `FALLBACK_LIGHT=1`, ScarlettPort `DebugView`, integracja ze Steam).
+- `e:\gta6\ODPAL_SCARLETTPORT.bat` — szybkie uruchamianie ScarlettPort.
+- `e:\gta6\ODPAL_GTA6.bat` — szybkie uruchamianie VIctory/Causeway + Steam.
+- `e:\gta6\dodaj_do_steama.py` / `DODAJ_DO_STEAMA.bat` — dodawanie skrótu GTA VI z okładkami do Steam.
