@@ -679,8 +679,9 @@ fn root_signature(
 }
 #[cfg(all(test, feature = "diagnostics"))]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use crate::test_shader::{compile, dxc};
     use std::sync::atomic::Ordering;
+    use windows::core::Interface;
 
     use super::*;
 
@@ -695,32 +696,6 @@ mod tests {
             t[0] = uint3(0, 1, 2);
         }";
     const PS: &str = "float4 main() : SV_Target { return 1; }";
-
-    /// The PC `dxc.exe` (`VICTORY_PC_DXC`, else the newest Windows SDK's).
-    fn dxc() -> Option<PathBuf> {
-        let dxc = match std::env::var_os("VICTORY_PC_DXC") {
-            Some(p) => PathBuf::from(p),
-            None => victory_shader::emit::validator::Validator::default_path()?
-                .with_file_name("dxc.exe"),
-        };
-        dxc.exists().then_some(dxc)
-    }
-
-    fn compile(dxc: &Path, dir: &Path, src: &str, profile: &str) -> Vec<u8> {
-        let (hlsl, out) = (
-            dir.join(format!("{profile}.hlsl")),
-            dir.join(format!("{profile}.dxil")),
-        );
-        std::fs::write(&hlsl, src).unwrap();
-        let status = std::process::Command::new(dxc)
-            .args(["-nologo", "-T", profile, "-E", "main", "-Fo"])
-            .arg(&out)
-            .arg(&hlsl)
-            .status()
-            .unwrap();
-        assert!(status.success(), "dxc failed for {profile}");
-        std::fs::read(out).unwrap()
-    }
 
     fn code(bytes: &[u8]) -> D3D12_SHADER_BYTECODE {
         D3D12_SHADER_BYTECODE {
@@ -792,7 +767,6 @@ mod tests {
             list.list.SetComputeRootSignature(&root);
         }
         list.close();
-        host.execute(&[&list]);
-        assert_eq!(host.log_messages(), None);
+        assert_eq!(host.execute_checked(&[&list]), None);
     }
 }

@@ -6,7 +6,7 @@ VI Causeway is an experimental Windows compatibility layer for the Xbox Series X
 
 On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally. On a returning profile, the movie led directly to the illustrated story loading screens.
 
-The RTX 3060 Ti now renders two opening story cards, **VICE CITY, TWO YEARS AGO** and **ROCKSTAR GAMES PRESENTS**. A cold host-pipeline run reached its 60-second world limit without a device error or Windows display reset. The ten complete world samples ranged from 0.6 to 1.4 fps with a median of 0.95 fps. Captures between and after the cards remained dark. Visible world geometry, player control, and the in-story pause menu remain unverified. Earlier builds reset the driver shortly after the first card. [Earlier device loss](https://github.com/Marvisak/VIctory/issues/71#issuecomment-7118495778) � [36-second renderer test](https://github.com/Marvisak/VIctory/pull/135#issuecomment-7118921431)
+The RTX 3060 Ti now renders two opening story cards, **VICE CITY, TWO YEARS AGO** and **ROCKSTAR GAMES PRESENTS**. A cold host-pipeline run reached its 60-second world limit without a device error or Windows display reset. The ten complete world samples ranged from 0.6 to 1.4 fps with a median of 0.95 fps. Captures between and after the cards remained dark. Visible world geometry, player control, and the in-story pause menu remain unverified. Earlier builds reset the driver shortly after the first card. [Earlier device loss](https://github.com/Marvisak/VIctory/issues/71#issuecomment-7118495778) � [36-second renderer test](https://github.com/Marvisak/VIctory/pull/135#issuecomment-7118921431)
 
 In a release-build comparison on that machine, the opening movie ran at 30 fps. Reusing texture row spans reduced reported texture preparation from 14.8–15.7 to 3.1–3.4 ms per movie frame. A process-only audio capture matched the original soundtrack through its fade with no measurable accumulated delay.
 
@@ -104,6 +104,8 @@ victory config
 Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
 info and above).
 
+On CPUs that emulate CLZERO, `VICTORY_BATCH_CLZERO=1` enables batching for recognized 32 to 64 KiB clears. This option works in release and diagnostic builds. Its impact on story frame time has yet to be measured.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
@@ -120,7 +122,6 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
 | `VICTORY_KEY_FILE=<path>` | reads one key per request, such as `Esc` or `Esc 2000` for a two-second hold. The default hold is 250 ms. |
 | `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_BATCH_CLZERO=1` | batches recognized 32 to 64 KiB guest cache-line clears on CPUs that emulate CLZERO |
 | `VICTORY_CAPTURE=<dir>` | saves frames numbered with powers of two and any frames listed in `VICTORY_CAPTURE_FRAMES` |
 | `VICTORY_CAPTURE_ON_DEMAND=1` | saves listed frames plus one presented frame each time you create an empty `capture-next` file in the capture folder |
 | `VICTORY_CAPTURE_FAST=1` | skips the per-frame black-transition probe and keeps requested PNG captures |

@@ -209,7 +209,10 @@ fn create_device(warp: bool) -> windows::core::Result<Host> {
                 if let Ok(d1) = l.cast::<ID3D12Debug1>() {
                     d1.SetEnableGPUBasedValidation(true);
                 }
-                if let Ok(d2) = l.cast::<ID3D12Debug2>() {
+                // Isolated WARP tests also validate resource-state transitions.
+                if !cfg!(test)
+                    && let Ok(d2) = l.cast::<ID3D12Debug2>()
+                {
                     d2.SetGPUBasedValidationFlags(
                         D3D12_GPU_BASED_VALIDATION_FLAGS_DISABLE_STATE_TRACKING,
                     );
@@ -527,13 +530,18 @@ impl Host {
 
     /// Runs closed lists and waits for them.
     pub(crate) fn execute(&self, runs: &[&HostList]) {
+        let _ = self.execute_checked(runs);
+    }
+
+    /// First debug-layer error from this submission, captured before the queue is cleared.
+    pub(crate) fn execute_checked(&self, runs: &[&HostList]) -> Option<String> {
         // One submission at a time from preparation to copy-back: snapshots
         // and the ranges shaders write are per host copy, not per submission.
         let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
-        self.execute_locked(runs, &mut submitted);
+        self.execute_locked(runs, &mut submitted)
     }
 
-    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) {
+    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) -> Option<String> {
         let started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::Submissions, 1);
@@ -647,7 +655,7 @@ impl Host {
                 what.write(at as *mut u8, bytes);
             }
         }
-        self.log_messages();
+        self.log_messages()
     }
 
     /// With `VICTORY_D3D12_DRED`: the faulting address and the allocations
@@ -2023,7 +2031,7 @@ impl Host {
                 }
             };
             p.copy.close();
-            self.execute_locked(&[&p.copy], &mut submitted);
+            let _ = self.execute_locked(&[&p.copy], &mut submitted);
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);

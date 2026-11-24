@@ -20,6 +20,8 @@ victory-shader.workspace = true
 tempfile.workspace = true
 
 [features]
+# Export SDK 620 from the WARP test executable on Windows MSVC.
+agility = []
 # Debugging switches (frame capture, the host debug layer, per-draw data).
 diagnostics = []
 

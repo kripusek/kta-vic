@@ -1376,7 +1376,7 @@ mod tests {
         let (readback, footprint) =
             crate::capture::read_back(device, l, color).expect("color readback");
         list.close();
-        host.execute(&[&list]);
+        assert_eq!(host.execute_checked(&[&list]), None);
         let mut mapped = std::ptr::null_mut();
         let mut pixels = Vec::new();
         // SAFETY: execution has completed and all pixels lie in the mapped footprint.

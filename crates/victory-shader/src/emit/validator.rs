@@ -122,11 +122,16 @@ impl Validator {
         if let Some(p) = std::env::var_os("VICTORY_DXIL") {
             return Some(p.into());
         }
+        Self::sdk_tool("dxil.dll")
+    }
+
+    /// Find a tool in an installed x64 Windows SDK, independently of validator overrides.
+    pub fn sdk_tool(name: &str) -> Option<PathBuf> {
         let kits = PathBuf::from(r"C:\Program Files (x86)\Windows Kits\10\bin");
         let mut versions: Vec<PathBuf> = std::fs::read_dir(&kits)
             .ok()?
             .filter_map(Result::ok)
-            .map(|e| e.path().join(r"x64\dxil.dll"))
+            .map(|e| e.path().join("x64").join(name))
             .filter(|p| p.exists())
             .collect();
         versions.sort();
