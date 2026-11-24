@@ -92,6 +92,16 @@ mod wave;
 #[cfg(all(test, windows))]
 mod wave_tests;
 
+#[cfg(all(test, windows))]
+fn check_gpu_coverage(ran: usize) {
+    if ran == 0 {
+        #[cfg(feature = "agility")]
+        panic!("no compatible SM 6.6 device available");
+        #[cfg(not(feature = "agility"))]
+        eprintln!("no compatible SM 6.6 device; GPU assertions skipped");
+    }
+}
+
 use crate::dxbc::{Container, FourCC};
 use crate::native::{HwStage, NativeProgram, RootType};
 use crate::{ShaderError, io, ir, resource, structure};

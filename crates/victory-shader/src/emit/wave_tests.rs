@@ -5,7 +5,7 @@ use super::bitcode::{Attr, Term};
 use super::container::SigElement;
 use super::host::{Dispatch, Draw, Host, Root, View};
 use super::shader::Shader;
-use super::{HostShader, WaveRange, lower, validator};
+use super::{HostShader, WaveRange, check_gpu_coverage, lower, validator};
 use crate::dxbc::{Container, FourCC, u32_at};
 use crate::native::{
     ComputeIo, HwStage, NativeProgram, ResourceType, RootParam, RootType, StageIo, UsedResource,
@@ -23,15 +23,6 @@ pub static D3D12SDKVersion: u32 = 620;
 #[cfg(all(feature = "agility", target_env = "msvc"))]
 #[unsafe(no_mangle)]
 pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
-
-fn check_gpu_coverage(ran: usize) {
-    if ran == 0 {
-        #[cfg(feature = "agility")]
-        panic!("no compatible SM 6.6 device available");
-        #[cfg(not(feature = "agility"))]
-        eprintln!("no compatible SM 6.6 device; GPU assertions skipped");
-    }
-}
 
 /// SOP1 `s_mov_b32 sdst, src0`.
 const fn s_mov_b32(sdst: u8, src0: u8) -> u32 {

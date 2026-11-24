@@ -6876,6 +6876,7 @@ mod tests {
         let st = structure::structure(&p).unwrap();
         lower(&Parts {
             native: &native,
+            host_waves: None,
             p: &p,
             st: &st,
             io: &io,

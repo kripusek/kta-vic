@@ -128,6 +128,7 @@ fn build_valu_cs(body: &[u32]) -> HostShader {
     let st = structure::structure(&p).expect("structure");
     let lowered = lower::lower(&lower::Parts {
         native: &native,
+        host_waves: None,
         p: &p,
         st: &st,
         io: &io,
@@ -200,7 +201,7 @@ fn run_cases(
         }
         ran += 1;
     }
-    assert!(ran > 0, "neither hardware nor WARP SM 6.6 device available");
+    super::check_gpu_coverage(ran);
 }
 
 fn is_f16_nan(bits: u16) -> bool {
