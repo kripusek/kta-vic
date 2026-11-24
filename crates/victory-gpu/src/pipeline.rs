@@ -216,14 +216,28 @@ static DROPS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 /// (diagnostics).
 #[cfg(all(windows, feature = "diagnostics"))]
 pub(crate) fn note_drop(this: This) {
-    let why = if this.is_null() {
+    if let Some(why) = unavailable_reason(this) {
+        note_why(why);
+    }
+}
+
+/// The pipeline's unavailable status at the point a command is dropped.
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn unavailable_reason(this: This) -> Option<String> {
+    if this.is_null() {
         Some("no pipeline set".to_owned())
     } else {
         make::missing(&pipeline(this).host)
-    };
-    if let Some(why) = why {
-        note_why(why);
     }
+}
+
+/// Shader stages and hashes for a captured operation, including unavailable PSOs.
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn captured_shaders(this: This) -> String {
+    if this.is_null() {
+        return String::new();
+    }
+    format!("{:?}", pipeline(this).shaders)
 }
 
 /// Counts a draw or dispatch dropped for `why` (diagnostics).
