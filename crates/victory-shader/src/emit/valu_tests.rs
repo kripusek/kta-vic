@@ -122,12 +122,16 @@ fn build_valu_cs(body: &[u32]) -> HostShader {
         code,
     };
 
+    lower_synthetic_compute(&native)
+}
+
+fn lower_synthetic_compute(native: &NativeProgram) -> HostShader {
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
     let res = resource::track(&p, &native.layout, native.stage).expect("resource::track");
-    let io = io::raise(&p, &native).expect("io::raise");
+    let io = io::raise(&p, native).expect("io::raise");
     let st = structure::structure(&p).expect("structure");
     let lowered = lower::lower(&lower::Parts {
-        native: &native,
+        native,
         host_waves: None,
         p: &p,
         st: &st,
@@ -674,4 +678,144 @@ fn bfe_signed_and_unsigned_match_rdna2() {
             inp[0], inp[1], inp[2],
         );
     });
+}
+
+/// Indexed vector loads from a CBV, stored to a raw UAV for comparison with host data.
+fn build_indexed_cbv_cs(byte_offset: u16, dynamic: bool, count: usize) -> HostShader {
+    let mut words = vec![s_mov_b32(1, 0x80), s_mov_b32(3, 0x80)];
+    words.extend(s_load_dwordx4(8, 0));
+    words.extend(s_load_dwordx4(12, 2));
+    // v0/v1 hold the input row and optional byte offset, v2 the output offset.
+    words.push(vop1(1, 1, sgpr(4)));
+    for reg in 4..8 {
+        words.push(vop1(1, reg, 128));
+    }
+    let op = if count == 2 { 0x0d } else { 0x0e };
+    words.extend([
+        0x3404_0084,         // v_lshlrev_b32 v2, 4, v0
+        vop1(1, 3, sgpr(5)), // v_mov_b32 v3, s5; group ID
+        0x3406_0689,         // v_lshlrev_b32 v3, 9, v3; output group base
+        0x4a04_0503,         // v_add_nc_u32 v2, v3, v2
+        0xE000_2000 | (op << 18) | (u32::from(dynamic) << 12) | u32::from(byte_offset),
+        0x8002_0400, // buffer_load_dwordx2/x4 from the CBV, v0 or v[0:1], s[8:11]
+        0xE078_1000,
+        0x8003_0402, // buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen
+        S_ENDPGM,
+    ]);
+    let native = NativeProgram {
+        stage: HwStage::Cs,
+        wave64: false,
+        vgprs: 8,
+        layout: vec![
+            RootParam {
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data: 0,
+                slot: 0,
+            },
+            RootParam {
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data: 2,
+                slot: 1,
+            },
+            RootParam {
+                root: RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data: 4,
+                slot: 2,
+            },
+        ],
+        used: [(ResourceType::Cbv, 0, 0), (ResourceType::Uav, 2, 1)]
+            .into_iter()
+            .map(|(kind, user_data, slot)| UsedResource {
+                kind,
+                user_data,
+                slot,
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                lower_bound: 0,
+                stride: 0,
+                dwords: 4,
+            })
+            .collect(),
+        io: StageIo::Cs(ComputeIo {
+            rsrc2: 5 << 1 | 1 << 7,
+            threads: [32, 1, 1],
+        }),
+        code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+    };
+    lower_synthetic_compute(&native)
+}
+
+#[test]
+fn indexed_cbv_loads_match_their_byte_addresses() {
+    let input: Vec<u32> = (0u32..192)
+        .map(|i| (i + 1).wrapping_mul(0x91de_2f71).rotate_left(i % 32))
+        .collect();
+    let variants = [
+        (0, false, 4),
+        (16, false, 4),
+        (12, false, 4),
+        (0, true, 4),
+        (4, false, 2),
+        (8, false, 2),
+        (12, false, 2),
+        (2, false, 2),
+    ]
+    .map(|(offset, dynamic, count)| {
+        (
+            offset,
+            dynamic,
+            count,
+            build_indexed_cbv_cs(offset, dynamic, count),
+        )
+    });
+    let host = Host::new(true).expect("SM 6.6 software WARP");
+    for (offset, dynamic, count, shader) in &variants {
+        let (root, pso) = host.compute_pipeline(shader).expect("compute pipeline");
+        let byte_offsets: &[u32] = if *dynamic { &[0, 4, 12, 16] } else { &[0] };
+        for &dynamic_offset in byte_offsets {
+            let mut ud = vec![0u32; shader.user_data_dwords() as usize];
+            for u in &shader.user_data {
+                ud[u.index as usize] = match (u.root, u.slot) {
+                    (RootType::Table, 0) => 0,
+                    (RootType::Table, 1) => 32,
+                    (RootType::Constants, 2) => dynamic_offset,
+                    other => panic!("unexpected user data {other:?}"),
+                };
+            }
+            let actual = host
+                .dispatch(
+                    &root,
+                    &pso,
+                    &Dispatch {
+                        roots: vec![(0, Root::Constants(ud))],
+                        views: &[View::Cbv(&input), View::RawUav(256)],
+                        samplers: &[],
+                        groups: [2, 1, 1],
+                    },
+                )
+                .expect("compute dispatch");
+            let dword = (usize::from(*offset) + dynamic_offset as usize) / 4;
+            assert_eq!(actual[0].len(), 256);
+            for group in actual[0].as_chunks::<128>().0 {
+                for (lane, result) in group.as_chunks::<4>().0.iter().enumerate() {
+                    let at = dword + lane * 4;
+                    assert_eq!(
+                        &result[..*count],
+                        &input[at..at + count],
+                        "offset {offset} dynamic {dynamic_offset} lane {lane}"
+                    );
+                    assert!(result[*count..].iter().all(|&value| value == 0));
+                }
+            }
+        }
+    }
 }

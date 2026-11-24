@@ -461,8 +461,7 @@ const NO_FOOTPRINT: PlacedFootprint = PlacedFootprint {
     row_pitch: 0,
 };
 
-/// One subresource's size in an upload buffer: footprint (offset 0), rows
-/// and bytes per row. Planes of depth-stencil formats are not told apart.
+/// One subresource's upload footprint (offset 0), row count and unpadded row size.
 fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32, u64)> {
     const PITCH: u64 = 256;
     if desc.dimension == BUFFER {
@@ -482,11 +481,18 @@ fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32,
     } else {
         u32::from(desc.depth_or_array_size).max(1)
     };
-    let (mip, slice) = (index % mips, index / mips);
-    if slice >= slices {
-        return None;
-    }
-    let (element, block) = element(desc.format)?;
+    let mip = index % mips;
+    let plane = index / mips / slices;
+    let depth_stencil = matches!(desc.format, 19..=22 | 44..=47);
+    // Each plane contains all the mip levels and array slices. Depth and
+    // stencil copies use separate formats and 512-byte row alignment.
+    let (format, pitch_alignment) = match (depth_stencil, plane) {
+        (true, 0) => (39, 512), // DXGI_FORMAT_R32_TYPELESS
+        (true, 1) => (60, 512), // DXGI_FORMAT_R8_TYPELESS
+        (false, 0) => (desc.format, PITCH),
+        _ => return None,
+    };
+    let (element, block) = element(format)?;
     let width = (desc.width >> mip).max(1).next_multiple_of(block);
     let height = (u64::from(desc.height) >> mip)
         .max(1)
@@ -499,18 +505,18 @@ fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32,
     let row_size = width / block * element;
     let footprint = PlacedFootprint {
         offset: 0,
-        format: desc.format,
+        format,
         width: u32::try_from(width).ok()?,
         height: u32::try_from(height).ok()?,
         depth,
-        row_pitch: u32::try_from(row_size.next_multiple_of(PITCH)).ok()?,
+        row_pitch: u32::try_from(row_size.next_multiple_of(pitch_alignment)).ok()?,
     };
     Some((footprint, u32::try_from(height / block).ok()?, row_size))
 }
 
-/// Device method: where each subresource goes in an upload buffer, rows
-/// 256-byte and subresources 512-byte aligned, as on PC. Unknown sizes give
-/// the documented all-ones values.
+/// Places subresources at 512-byte boundaries in an upload buffer.
+/// Row pitch is aligned to 512 bytes for depth/stencil planes and 256 bytes
+/// otherwise. Unknown sizes give the documented all-ones values.
 pub(crate) extern "system" fn copyable_footprints(
     _: This,
     desc: *const ResourceDesc,
@@ -1967,6 +1973,216 @@ mod tests {
         assert_eq!(packed_transfer_format(Some(86), Some(115), None), None);
         assert_eq!(packed_transfer_format(None, None, Some(87)), Some(87));
         assert!(packed_transfer_format(None, None, None).is_some());
+    }
+
+    #[test]
+    fn depth_stencil_footprints_follow_the_pc_plane_order() {
+        // Native D3D12 reports the same layout for both depth/stencil families
+        // and their view formats. Mips vary fastest, then array slices, then planes.
+        let expected = [
+            (512, 39, 16, 8),
+            (4_608, 39, 8, 4),
+            (6_656, 39, 16, 8),
+            (10_752, 39, 8, 4),
+            (12_800, 60, 16, 8),
+            (16_896, 60, 8, 4),
+            (18_944, 60, 16, 8),
+            (23_040, 60, 8, 4),
+        ];
+        for format in (19..=22).chain(44..=47) {
+            let desc = ResourceDesc {
+                depth_or_array_size: 2,
+                ..texture(16, 8, format, 2)
+            };
+            let mut layouts = [NO_FOOTPRINT; 8];
+            let (mut rows, mut sizes, mut total) = ([0; 8], [0; 8], 0);
+            copyable_footprints(
+                std::ptr::null(),
+                &desc,
+                0,
+                8,
+                512,
+                layouts.as_mut_ptr(),
+                rows.as_mut_ptr(),
+                sizes.as_mut_ptr(),
+                &mut total,
+            );
+
+            assert_eq!(
+                layouts.map(|l| (l.offset, l.format, l.width, l.height)),
+                expected,
+                "format {format}"
+            );
+            assert!(
+                layouts.iter().all(|l| l.depth == 1 && l.row_pitch == 512),
+                "format {format}"
+            );
+            assert_eq!(rows, [8, 4, 8, 4, 8, 4, 8, 4], "format {format}");
+            assert_eq!(sizes, [64, 32, 64, 32, 16, 8, 16, 8], "format {format}");
+            assert_eq!(total, 24_072, "format {format}");
+            assert!(subresource(&desc, 8).is_none(), "format {format}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn depth_stencil_footprints_match_native_and_read_back_planes() {
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::*;
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let null = std::ptr::null();
+        for (format, depth_mask, depth_bits) in
+            [(45, 0x00ff_ffff, 0x0080_0000), (20, u32::MAX, 0x3f00_0000)]
+        {
+            let desc = ResourceDesc {
+                flags: 2,
+                ..texture(4, 3, format, 1)
+            };
+            let mut planes = [NO_FOOTPRINT; 2];
+            let mut total = 0;
+            copyable_footprints(
+                null,
+                &desc,
+                0,
+                2,
+                0,
+                planes.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut total,
+            );
+            let texture =
+                host_texture(&desc, 0x10, null.cast()).expect("host depth-stencil texture");
+            let mut native = [D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); 2];
+            let mut native_size = 0;
+            // SAFETY: all resources and command list are live through the synchronous submit.
+            unsafe {
+                host.device.GetCopyableFootprints(
+                    &texture.GetDesc(),
+                    0,
+                    2,
+                    0,
+                    Some(native.as_mut_ptr()),
+                    None,
+                    None,
+                    Some(&mut native_size),
+                );
+                assert_eq!(total, native_size);
+                for (fit, native) in planes.into_iter().zip(native) {
+                    assert_eq!(fit.offset, native.Offset);
+                    assert_eq!(fit.format, native.Footprint.Format.0 as u32);
+                    assert_eq!(fit.width, native.Footprint.Width);
+                    assert_eq!(fit.height, native.Footprint.Height);
+                    assert_eq!(fit.row_pitch, native.Footprint.RowPitch);
+                }
+
+                let heap: ID3D12DescriptorHeap = host
+                    .device
+                    .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                        Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+                        NumDescriptors: 1,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                let dsv = heap.GetCPUDescriptorHandleForHeapStart();
+                host.device.CreateDepthStencilView(
+                    &texture,
+                    Some(&D3D12_DEPTH_STENCIL_VIEW_DESC {
+                        Format: DXGI_FORMAT(format as i32),
+                        ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+                        ..Default::default()
+                    }),
+                    dsv,
+                );
+                let mut buffer: Option<ID3D12Resource> = None;
+                host.device
+                    .CreateCommittedResource(
+                        &D3D12_HEAP_PROPERTIES {
+                            Type: D3D12_HEAP_TYPE_READBACK,
+                            ..Default::default()
+                        },
+                        D3D12_HEAP_FLAG_NONE,
+                        &D3D12_RESOURCE_DESC {
+                            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                            Width: total,
+                            Height: 1,
+                            DepthOrArraySize: 1,
+                            MipLevels: 1,
+                            SampleDesc: DXGI_SAMPLE_DESC {
+                                Count: 1,
+                                Quality: 0,
+                            },
+                            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                            ..Default::default()
+                        },
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                        None,
+                        &mut buffer,
+                    )
+                    .unwrap();
+                let buffer = buffer.unwrap();
+                let list = host.new_list().unwrap();
+                list.list.ClearDepthStencilView(
+                    dsv,
+                    D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
+                    0.5,
+                    0x5a,
+                    None,
+                );
+                list.list.ResourceBarrier(&[crate::host::transition(
+                    &texture,
+                    D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                )]);
+                for (subresource, fit) in planes.into_iter().enumerate() {
+                    let src = D3D12_TEXTURE_COPY_LOCATION {
+                        pResource: std::mem::transmute_copy(&texture),
+                        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                            SubresourceIndex: subresource as u32,
+                        },
+                    };
+                    let dst = D3D12_TEXTURE_COPY_LOCATION {
+                        pResource: std::mem::transmute_copy(&buffer),
+                        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                            PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                                Offset: fit.offset,
+                                Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                                    Format: DXGI_FORMAT(fit.format as i32),
+                                    Width: fit.width,
+                                    Height: fit.height,
+                                    Depth: fit.depth,
+                                    RowPitch: fit.row_pitch,
+                                },
+                            },
+                        },
+                    };
+                    list.list.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+                }
+                list.close();
+                assert_eq!(host.execute_checked(&[&list]), None);
+                let mut data = std::ptr::null_mut();
+                buffer.Map(0, None, Some(&mut data)).unwrap();
+                let data = data.cast::<u8>();
+                for y in 0..3 {
+                    for x in 0..4 {
+                        let at = |pl: usize| {
+                            planes[pl].offset as usize + y * planes[pl].row_pitch as usize
+                        };
+                        assert_eq!(
+                            data.add(at(0) + x * 4).cast::<u32>().read_unaligned() & depth_mask,
+                            depth_bits
+                        );
+                        assert_eq!(data.add(at(1) + x).read(), 0x5a);
+                    }
+                }
+                buffer.Unmap(0, None);
+            }
+        }
     }
 
     /// A 4x4 texture filled from a title buffer through our list and queue,

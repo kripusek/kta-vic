@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use victory_pipeline::{Cache, Converter};
 use victory_shader::emit::{HostShader, StaticSampler, UserData, WaveRange};
-use victory_shader::{HwStage, RootType};
+use victory_shader::{HwStage, RootType, ShaderError};
 
 static CACHE: OnceLock<Cache> = OnceLock::new();
 static HITS: AtomicU64 = AtomicU64::new(0);
@@ -83,11 +83,10 @@ fn cache_key(build: &[u8; 32], waves: Option<WaveRange>) -> [u8; 32] {
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
     let waves = host_waves();
-    let translate =
-        |c: &[u8]| victory_shader::emit::translate_for(c, waves).map_err(|e| e.to_string());
+    let translate = |c: &[u8]| victory_shader::emit::translate_for(c, waves);
     match CACHE.get() {
         Some(cache) => cached(cache, &cache_key(build(), waves), container, translate),
-        None => translate(container),
+        None => translate(container).map_err(|e| e.to_string()),
     }
 }
 
@@ -98,7 +97,7 @@ struct Translate<F> {
     ran: AtomicBool,
 }
 
-impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Translate<F> {
+impl<F: Fn(&[u8]) -> Result<HostShader, ShaderError> + Send + Sync> Converter for Translate<F> {
     fn id(&self) -> &'static str {
         "shader.dxil"
     }
@@ -108,8 +107,20 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
     }
     fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
         self.ran.store(true, Ordering::Relaxed);
-        let shader = (self.translate)(&input[32..]).map_err(anyhow::Error::msg)?;
-        Ok(encode(&shader))
+        match (self.translate)(&input[32..]) {
+            Ok(shader) => Ok(encode(&shader)),
+            Err(e @ ShaderError::Unsupported { .. }) => {
+                // This is a decision of the translator for this build, container
+                // and wave range. Device, driver and file I/O failures occur
+                // outside this decision and must remain retryable.
+                let reason = e.to_string();
+                let mut bytes = UNSUPPORTED.to_vec();
+                bytes.extend_from_slice(blake3::hash(reason.as_bytes()).as_bytes());
+                bytes.extend_from_slice(reason.as_bytes());
+                Ok(bytes)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 }
 
@@ -117,7 +128,7 @@ fn cached(
     cache: &Cache,
     build: &[u8; 32],
     container: &[u8],
-    translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
+    translate: impl Fn(&[u8]) -> Result<HostShader, ShaderError> + Send + Sync,
 ) -> Result<HostShader, String> {
     let input = [&build[..], container].concat();
     let converter = Translate {
@@ -125,10 +136,22 @@ fn cached(
         ran: AtomicBool::new(false),
     };
     for _ in 0..2 {
-        let path = cache
-            .get_or_convert(&converter, &input)
-            .map_err(|e| format!("{e:#}"))?;
-        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
+        let path = match cache.get_or_convert(&converter, &input) {
+            Ok(path) => path,
+            Err(e) if e.downcast_ref::<ShaderError>().is_some() => return Err(format!("{e:#}")),
+            Err(e) => {
+                tracing::debug!(error = %e, "shader cache unavailable; translating directly");
+                break;
+            }
+        };
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        if let Some(reason) = unsupported_reason(&bytes) {
+            // Preserve the converter's diagnostic on the first and later runs.
+            return Err(format!(
+                "converter {} v{}: {reason}", converter.id(), converter.version()
+            ));
+        }
+        if let Some(shader) = decode(&bytes) {
             let (counter, what) = if converter.ran.load(Ordering::Relaxed) {
                 (&MISSES, "translated and cached")
             } else {
@@ -142,7 +165,19 @@ fn cached(
         let _ = std::fs::remove_file(&path);
     }
     MISSES.fetch_add(1, Ordering::Relaxed);
-    (converter.translate)(container)
+    (converter.translate)(container).map_err(|e| e.to_string())
+}
+
+// Check the digest before accepting a negative entry. Damaged data must
+// retry translation, just like a malformed positive entry.
+const UNSUPPORTED: &[u8; 4] = b"VSU1";
+
+fn unsupported_reason(bytes: &[u8]) -> Option<&str> {
+    let (digest, reason) = bytes.strip_prefix(UNSUPPORTED)?.split_at_checked(32)?;
+    if reason.is_empty() || digest != blake3::hash(reason).as_bytes() {
+        return None;
+    }
+    std::str::from_utf8(reason).ok()
 }
 
 const MAGIC: &[u8; 4] = b"VSH1";
@@ -345,9 +380,54 @@ mod tests {
         assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
         assert_eq!(runs.load(Ordering::Relaxed), 3);
 
-        // Failures are not stored.
-        let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
-        assert!(cached(&cache, &build, b"other", fail).is_err());
+        let fail = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Err(ShaderError::Malformed("invalid header"))
+        };
+        for _ in 0..2 {
+            assert!(cached(&cache, &build, b"other", fail).is_err());
+        }
+        assert_eq!(runs.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn unsupported_shader_is_retried_after_damage_or_target_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let runs = AtomicU64::new(0);
+        let fail = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Err(ShaderError::Unsupported { offset: 16, what: "test operation" })
+        };
+        let key = cache_key(&[42; 32], Some(WaveRange { min: 32, max: 32 }));
+        let reason = cached(&cache, &key, b"same", fail).unwrap_err();
+        assert!(reason.contains("0x10: test operation is not supported"));
+        assert_eq!(cached(&cache, &key, b"same", fail).unwrap_err(), reason);
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        let path = walk(dir.path()).pop().unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.pop();
+        std::fs::write(path, bytes).unwrap();
+        assert_eq!(cached(&cache, &key, b"same", fail).unwrap_err(), reason);
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+        let wave64 = cache_key(&[42; 32], Some(WaveRange { min: 64, max: 64 }));
+        assert_eq!(cached(&cache, &wave64, b"same", |_| Ok(shader())), Ok(shader()));
+        assert_eq!(cached(&cache, &[43; 32], b"same", |_| Ok(shader())), Ok(shader()));
+    }
+
+    #[test]
+    fn cache_write_failure_still_returns_the_translator_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("entries");
+        let cache = Cache::open(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::write(root, b"no subdirectories here").unwrap();
+        assert_eq!(cached(&cache, &[0; 32], b"valid", |_| Ok(shader())), Ok(shader()));
+        let e = ShaderError::Unsupported { offset: 4, what: "test operation" };
+        let reason = cached(&cache, &[0; 32], b"unsupported", |_| {
+            Err(ShaderError::Unsupported { offset: 4, what: "test operation" })
+        }).unwrap_err();
+        assert_eq!(reason, e.to_string());
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
