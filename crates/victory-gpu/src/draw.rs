@@ -53,6 +53,25 @@ pub(crate) struct IndexView {
 }
 
 /// What one title list has set, and what its host list was last given.
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Copy)]
+enum FrameOutcome {
+    Ran,
+    PreparationFailed(&'static str),
+    Dropped(&'static str),
+}
+
+#[cfg(feature = "diagnostics")]
+impl FrameOutcome {
+    fn reason(self, unavailable: impl FnOnce() -> Option<String>) -> Option<String> {
+        match self {
+            Self::Ran => None,
+            Self::PreparationFailed(reason) => unavailable().or_else(|| Some(reason.to_owned())),
+            Self::Dropped(reason) => Some(reason.to_owned()),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     pipeline: usize,
@@ -515,14 +534,33 @@ impl State {
             );
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
-            crate::pipeline::note_drop(self.pipeline as This);
+            {
+                self.frame_op(
+                    format_args!("dispatch {x}x{y}x{z}"),
+                    true,
+                    FrameOutcome::PreparationFailed("no host pipeline"),
+                );
+                crate::pipeline::note_drop(self.pipeline as This);
+            }
             return;
         };
         if !p.compute {
             once!("a dispatch with a graphics pipeline");
+            #[cfg(feature = "diagnostics")]
+            self.frame_op(
+                format_args!("dispatch {x}x{y}x{z}"),
+                true,
+                FrameOutcome::Dropped("graphics pipeline bound to dispatch"),
+            );
             return;
         }
         if !self.bind(list, p, true) {
+            #[cfg(feature = "diagnostics")]
+            self.frame_op(
+                format_args!("dispatch {x}x{y}x{z}"),
+                true,
+                FrameOutcome::Dropped("compute binding failed"),
+            );
             DROPPED.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -531,6 +569,39 @@ impl State {
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "diagnostics")]
+        self.frame_op(
+            format_args!("dispatch {x}x{y}x{z}"),
+            true,
+            FrameOutcome::Ran,
+        );
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn frame_op(&self, kind: std::fmt::Arguments<'_>, compute: bool, outcome: FrameOutcome) {
+        let Some(frame) = crate::capture::frame_op() else {
+            return;
+        };
+        let reason = outcome.reason(|| crate::pipeline::unavailable_reason(self.pipeline as This));
+        let color = if compute { &[][..] } else { &self.targets };
+        let depth = if compute { 0 } else { self.depth };
+        let color = color
+            .iter()
+            .map(|(resource, _)| format!("{resource:#x}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        tracing::info!(
+            frame,
+            operation = %kind,
+            pipeline = format_args!("{:#x}", self.pipeline),
+            topology = self.topology,
+            shaders = %crate::pipeline::captured_shaders(self.pipeline as This),
+            color = %color,
+            depth = format_args!("{depth:#x}"),
+            ran = reason.is_none(),
+            drop_reason = reason.as_deref(),
+            "captured frame operation"
+        );
     }
 
     /// What a draw or dispatch runs, for the device-removed report
@@ -587,6 +658,16 @@ impl State {
                 }
                 Err(_) => false,
             };
+        #[cfg(feature = "diagnostics")]
+        self.frame_op(
+            format_args!("mesh {x}"),
+            false,
+            if ran {
+                FrameOutcome::Ran
+            } else {
+                FrameOutcome::PreparationFailed("mesh preparation or command-list interface failed")
+            },
+        );
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
@@ -839,6 +920,16 @@ impl State {
             };
             DRAWN.fetch_add(1, Ordering::Relaxed);
         }
+        #[cfg(feature = "diagnostics")]
+        self.frame_op(
+            format_args!("draw {vertices}x{instances} from {first}"),
+            false,
+            if ran {
+                FrameOutcome::Ran
+            } else {
+                FrameOutcome::PreparationFailed("draw preparation or rectangle expansion failed")
+            },
+        );
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
@@ -930,6 +1021,20 @@ impl State {
             };
             DRAWN.fetch_add(1, Ordering::Relaxed);
         }
+        #[cfg(feature = "diagnostics")]
+        self.frame_op(
+            format_args!("indexed {indices}x{instances} from {first}"),
+            false,
+            if ran {
+                FrameOutcome::Ran
+            } else {
+                FrameOutcome::PreparationFailed(if self.topology == RECTANGLES {
+                    "indexed rectangles unsupported"
+                } else {
+                    "indexed draw preparation failed"
+                })
+            },
+        );
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
@@ -957,12 +1062,27 @@ impl State {
         const DISPATCH: u32 = 2;
         const MESH: u32 = 10;
         #[cfg(feature = "diagnostics")]
-        let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+        let why = |what: &str| {
+            crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+        };
+        #[cfg(feature = "diagnostics")]
+        let trace = |state: &Self, failure| {
+            state.frame_op(
+                format_args!("indirect kind {kind} max {max} at {arguments:#x}"),
+                kind == DISPATCH,
+                failure,
+            )
+        };
         #[cfg(not(feature = "diagnostics"))]
         let why = |_: &str| {};
         let len = u64::from(stride) * u64::from(max.max(1));
         let Some(args) = crate::shadow::find(arguments, len) else {
             why("arguments outside title buffers");
+            #[cfg(feature = "diagnostics")]
+            trace(
+                self,
+                FrameOutcome::Dropped("arguments outside title buffers"),
+            );
             return false;
         };
         let counter = match count {
@@ -970,6 +1090,8 @@ impl State {
                 Some(s) => Some((s, at)),
                 None => {
                     why("count outside title buffers");
+                    #[cfg(feature = "diagnostics")]
+                    trace(self, FrameOutcome::Dropped("count outside title buffers"));
                     return false;
                 }
             },
@@ -980,6 +1102,8 @@ impl State {
             .flatten()
         else {
             why("no host signature");
+            #[cfg(feature = "diagnostics")]
+            trace(self, FrameOutcome::Dropped("no host signature"));
             return false;
         };
         args.refresh(list, arguments, len);
@@ -989,6 +1113,11 @@ impl State {
         // Bounded first: the clamp binds a compute pipeline of its own.
         if !crate::indirect::bound(list, &args.buffer, args.gpu(arguments), (kind, stride, max)) {
             why("not bounded (no clamp, or arguments not 4-byte aligned)");
+            #[cfg(feature = "diagnostics")]
+            trace(
+                self,
+                FrameOutcome::Dropped("not bounded (no clamp, or arguments not 4-byte aligned)"),
+            );
             return false;
         }
         self.host_pipeline = 0;
@@ -1003,6 +1132,11 @@ impl State {
             _ => false,
         };
         if !ran {
+            #[cfg(feature = "diagnostics")]
+            trace(
+                self,
+                FrameOutcome::PreparationFailed("indirect preparation or binding failed"),
+            );
             crate::indirect::done(list, &args.buffer);
             #[cfg(feature = "diagnostics")]
             match crate::pipeline::host_pipeline(self.pipeline as This) {
@@ -1033,6 +1167,8 @@ impl State {
         } else {
             DRAWN.fetch_add(1, Ordering::Relaxed);
         }
+        #[cfg(feature = "diagnostics")]
+        trace(self, FrameOutcome::Ran);
         true
     }
 }
@@ -1197,6 +1333,30 @@ mod tests {
     use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
     use windows::core::s;
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn frame_operation_reports_command_failures_before_pipeline_status() {
+        let unavailable = || panic!("concrete command outcomes do not query the pipeline");
+        assert_eq!(FrameOutcome::Ran.reason(unavailable), None);
+        assert_eq!(
+            FrameOutcome::Dropped("count outside title buffers")
+                .reason(unavailable)
+                .as_deref(),
+            Some("count outside title buffers")
+        );
+        let preparation = FrameOutcome::PreparationFailed("draw preparation failed");
+        assert_eq!(
+            preparation
+                .reason(|| Some("pipeline is still queued".to_owned()))
+                .as_deref(),
+            Some("pipeline is still queued")
+        );
+        assert_eq!(
+            preparation.reason(|| None).as_deref(),
+            Some("draw preparation failed")
+        );
+    }
 
     struct Texture(This);
 

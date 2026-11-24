@@ -373,7 +373,9 @@ impl TargetRequest {
 /// Arm a single future frame when the dedicated on-demand marker appears.
 pub(crate) fn poll_target_request(present: u64) {
     static MARKER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-        let TargetFilter::Match { .. } = target_filter()? else { return None };
+        let TargetFilter::Match { .. } = target_filter()? else {
+            return None;
+        };
         (std::env::var("VICTORY_CAPTURE_ON_DEMAND").as_deref() == Ok("1"))
             .then(|| folder().unwrap().join("capture-target-next"))
     });
@@ -381,6 +383,67 @@ pub(crate) fn poll_target_request(present: u64) {
         && let Some(frame) = TARGET_REQUEST.poll(marker, present, Instant::now())
     {
         tracing::info!(frame, "target and presentation capture armed");
+        static TRACE_OPS: LazyLock<bool> =
+            LazyLock::new(|| std::env::var("VICTORY_CAPTURE_DRAW_DROPS").as_deref() == Ok("1"));
+        if *TRACE_OPS {
+            *OP_BUDGET.lock().unwrap_or_else(|e| e.into_inner()) = FrameOpBudget { frame, used: 0 };
+            OP_FRAME.store(frame, Relaxed);
+            tracing::info!(target: "victory_gpu::draw", frame, selector = ?target_filter(), "capture operation trace armed");
+        }
+    }
+}
+
+const MAX_FRAME_OPS: usize = 4096;
+static OP_FRAME: AtomicU64 = AtomicU64::new(0);
+static OP_BUDGET: Mutex<FrameOpBudget> = Mutex::new(FrameOpBudget { frame: 0, used: 0 });
+
+struct FrameOpBudget {
+    frame: u64,
+    used: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FrameOp {
+    Record,
+    LimitReached,
+    Ignore,
+}
+
+impl FrameOpBudget {
+    fn claim(&mut self, current: u64) -> FrameOp {
+        if current == 0 || self.frame != current || self.used > MAX_FRAME_OPS {
+            return FrameOp::Ignore;
+        }
+        self.used += 1;
+        if self.used <= MAX_FRAME_OPS {
+            FrameOp::Record
+        } else {
+            FrameOp::LimitReached
+        }
+    }
+}
+
+/// The operation belongs to the same recording frame as target retention.
+pub(crate) fn frame_op() -> Option<u64> {
+    let frame = OP_FRAME.load(Relaxed);
+    if frame == 0 || !tracing::enabled!(target: "victory_gpu::draw", tracing::Level::INFO) {
+        return None;
+    }
+    let current = crate::queue::presented() + 1;
+    if frame != current {
+        return None;
+    }
+    let claim = OP_BUDGET
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .claim(current);
+    match claim {
+        FrameOp::Record => Some(current),
+        FrameOp::LimitReached => {
+            tracing::info!(target: "victory_gpu::draw", frame, limit = MAX_FRAME_OPS, "capture operation limit reached");
+            None
+        }
+        FrameOp::Ignore => None,
     }
 }
 
@@ -720,6 +783,19 @@ mod tests {
         assert!(!request.armed(41));
         assert!(request.armed(42));
         assert!(!request.armed(43));
+        let selector = TargetFilter::parse("2560x1440-f28").unwrap();
+        assert!(matches!(selector, TargetFilter::Match { format: 28, .. }));
+        let mut budget = FrameOpBudget {
+            frame: request.frame.load(Relaxed),
+            used: 0,
+        };
+        assert_eq!(budget.claim(41), FrameOp::Ignore);
+        assert_eq!(budget.claim(43), FrameOp::Ignore);
+        for _ in 0..MAX_FRAME_OPS {
+            assert_eq!(budget.claim(42), FrameOp::Record);
+        }
+        assert_eq!(budget.claim(42), FrameOp::LimitReached);
+        assert_eq!(budget.claim(42), FrameOp::Ignore);
         assert_eq!(request.poll(&marker, 43, now + Duration::from_secs(1)), None);
         assert!(!request.armed(45));
     }
