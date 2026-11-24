@@ -275,7 +275,7 @@ fn translate_target(
             offset: 0,
             what: "a container without a vertex, pixel, compute or mesh program",
         })?;
-    let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
+    let p = ir::build_native(&native)?;
     match resource::track(&p, &native.layout, native.stage) {
         Ok(res) => emit_tracked(&c, &native, &p, &res, host_waves, options),
         Err(
@@ -705,6 +705,58 @@ mod tests {
         let c = Container::parse(&container).unwrap();
         if let Err(e) = emit(&c, &native, &p, &st, &io, &res) {
             assert!(e.to_string().contains("its own value"), "{e}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn entry_spills_with_a_clobbered_sgpr_lower_and_validate() {
+        use crate::native::RootParam;
+        let words = [
+            0xBE82_0300u32, // s2 = s0
+            0x8703_FF01,
+            0x0000_00FF, // s3 = s1 & 0xff
+            0xF40C_0301,
+            0xFA00_0010, // s[12:19] = argument dwords 4..11 (clobbers s16)
+            0xF404_0101,
+            0xFA00_0000, // s[4:5] = argument dwords 0..1
+            0xBF07_8004, // branch on the value from entry s16
+            0xBF85_0001,
+            0xBE86_0380,
+            0xBF81_0000,
+        ];
+        let native = NativeProgram {
+            stage: HwStage::Cs,
+            wave64: false,
+            vgprs: 1,
+            layout: vec![RootParam {
+                root: RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 12,
+                base_register: 0,
+                user_data: 16,
+                slot: 0,
+            }],
+            used: vec![],
+            io: StageIo::Cs(ComputeIo {
+                rsrc2: 4 << 1,
+                threads: [1, 1, 1],
+            }),
+            code: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+        };
+        let p = ir::build_native(&native).unwrap();
+        let st = structure::structure(&p).unwrap();
+        let io = io::raise(&p, &native).unwrap();
+        let res = resource::track(&p, &native.layout, native.stage).unwrap();
+        let bytes = crate::dxbc::build(&[]);
+        let container = Container::parse(&bytes).unwrap();
+        let mut shader = emit(&container, &native, &p, &st, &io, &res).unwrap();
+        assert!(shader.user_data.iter().any(|u| u.index == 16 && u.slot == 0));
+        if let Some(path) = validator::Validator::default_path() {
+            validator::Validator::load(Some(&path))
+                .unwrap()
+                .validate(&mut shader.dxil)
+                .unwrap();
         }
     }
 
