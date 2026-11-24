@@ -1542,6 +1542,70 @@ mod tests {
     }
 
     #[test]
+    fn first_copy_uploads_guest_texels_and_preserves_the_gpu_copy() {
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let make_texture = || {
+            fixture_texture(
+                4,
+                1,
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+                D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COMMON,
+            )
+        };
+        let (source, middle, target) = (make_texture(), make_texture(), make_texture());
+        let expected = [0x16u8, 0x5a, 0xae, 0xff];
+        let (address, desc) = crate::resource::texture_memory(source.0).unwrap();
+        let texture = crate::resource::texture_layout(&desc).unwrap();
+        let layout = &texture.planes[0].layout;
+        // SAFETY: source owns this writable allocation for its entire tiled footprint.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(address.cast_mut(), layout.size as usize) };
+        layout
+            .tile(bytes, 0, 0, &expected.repeat(16), 16, 64)
+            .unwrap();
+
+        let null = std::ptr::null();
+        let mut allocator = null;
+        let mut list = null;
+        let alloc_iid = ID3D12CommandAllocator::IID;
+        let list_iid = ID3D12GraphicsCommandList::IID;
+        assert_eq!(
+            crate::list::create_allocator(null, 0, (&raw const alloc_iid).cast(), &mut allocator,),
+            crate::object::S_OK
+        );
+        assert_eq!(
+            crate::list::create_list(
+                null,
+                0,
+                0,
+                allocator,
+                null,
+                (&raw const list_iid).cast(),
+                &mut list,
+            ),
+            crate::object::S_OK
+        );
+        let copy = crate::object::slot::<extern "system" fn(This, This, This)>(list, 0x88);
+        copy(list, middle.0, source.0);
+        // The middle texture's guest backing is still zero. Its GPU copy owns the pixels.
+        copy(list, target.0, middle.0);
+        assert_mip_zero_pixels(
+            host,
+            crate::list::host_list(list).unwrap(),
+            target.0,
+            4,
+            expected,
+        );
+        for object in [list, allocator] {
+            crate::object::slot::<extern "system" fn(This) -> u32>(object, 0x10)(object);
+        }
+    }
+
+    #[test]
     fn typed_null_rtv_keeps_the_next_color_slot() {
         let Some(host) = crate::host::host() else {
             return; // no host GPU here

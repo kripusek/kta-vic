@@ -42,6 +42,8 @@ When a watched range spans several Windows allocations, Causeway now retains dir
 
 Causeway now coalesces constant-buffer loads proven to lie in one 16-byte row and reports separate copy footprints for depth and stencil. On 116 previously translated story shaders, two vertex shaders used fewer DXIL loads and 114 retained identical bytecode. WARP readback verified the depth and stencil planes separately. [Constant-buffer loads](https://github.com/Marvisak/VIctory/pull/511) and [depth/stencil footprints](https://github.com/Marvisak/VIctory/pull/504)
 
+Causeway incorporates fuzeofficial's fix for a texture first used as a whole-resource copy source. A WARP test copies CPU-written pixels through two guest textures and checks all 16 destination pixels. [Upstream texture copy fix](https://github.com/Marvisak/VIctory/pull/671)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.
