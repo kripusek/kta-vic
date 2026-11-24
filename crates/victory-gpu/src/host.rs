@@ -1555,11 +1555,12 @@ fn copy_title_pieces(src: *const u8, dst: *mut u8, len: usize) {
 
 /// After a failed bulk read into host memory, skip contiguous holes. Never
 /// cache the query across copies: the title may remap the same address.
-fn read_sparse(src: *const u8, dst: *mut u8, len: usize) {
+fn read_sparse(src: *const u8, dst: *mut u8, len: usize) -> usize {
     use windows_sys::Win32::System::Memory::{
         MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, VirtualQuery,
     };
     let mut offset = 0;
+    let mut copied = 0;
     while offset < len {
         let at = src.wrapping_add(offset);
         let to = dst.wrapping_add(offset);
@@ -1570,7 +1571,7 @@ fn read_sparse(src: *const u8, dst: *mut u8, len: usize) {
         let n = (info.BaseAddress as usize).saturating_add(info.RegionSize)
             .saturating_sub(at as usize).min(remaining);
         if size != size_of_val(&info) || n == 0 {
-            read_pieces(at, to, remaining);
+            copied += read_pieces(at, to, remaining);
             break;
         }
         if info.State != MEM_COMMIT || info.Protect == PAGE_NOACCESS {
@@ -1580,15 +1581,19 @@ fn read_sparse(src: *const u8, dst: *mut u8, len: usize) {
             unsafe { to.write_bytes(0, n) };
         } else if !read(at, to, n) {
             // A mapping may change between query and read.
-            read_pieces(at, to, n);
+            copied += read_pieces(at, to, n);
+        } else {
+            copied += n;
         }
         offset += n;
     }
+    copied
 }
 
-fn read_pieces(src: *const u8, dst: *mut u8, len: usize) {
+fn read_pieces(src: *const u8, dst: *mut u8, len: usize) -> usize {
     // Something is unmapped: page by page (64 KiB, then 4 KiB in a piece
     // that fails), zeros for what cannot be read.
+    let mut copied = 0;
     for_pieces(src as usize, len, 64 << 10, |at, n| {
         let to = dst.wrapping_add(at - src as usize);
         if !read(at as *const u8, to, n) {
@@ -1599,10 +1604,27 @@ fn read_pieces(src: *const u8, dst: *mut u8, len: usize) {
                     crate::copystat::add(crate::copystat::C::Unmapped, n as u64);
                     // SAFETY: inside the destination, which is mapped.
                     unsafe { to.write_bytes(0, n) };
+                } else {
+                    copied += n;
                 }
             });
+        } else {
+            copied += n;
         }
     });
+    copied
+}
+
+/// Takes a kernel-checked snapshot with zeros for unreadable pages.
+pub(crate) fn read_mapped(src: *const u8, dst: &mut [u8]) -> usize {
+    let len = dst.len();
+    if len == 0 || read_into(src, dst) {
+        len
+    } else if len >= 64 << 10 {
+        read_sparse(src, dst.as_mut_ptr(), len)
+    } else {
+        read_pieces(src, dst.as_mut_ptr(), len)
+    }
 }
 
 /// Reads title memory at `src` into `dst`; false if a page of it is not

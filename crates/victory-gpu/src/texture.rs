@@ -8,7 +8,7 @@
 //! "Changed" means a page of the memory was written since the last detiling
 //! ([`crate::watch`]), in write-watched memory; in physical-page views,
 //! which cannot be watched, a content hash of the whole memory at every
-//! submission that samples it.
+//! submission that samples it, with zeros for unmapped bytes.
 //!
 //! shortcut: a change detiles the whole texture, not the pages written.
 //! Only textures read through descriptor tables are brought up to date
@@ -56,7 +56,7 @@ struct Last {
 }
 
 thread_local! {
-    /// The watched-memory snapshot is consumed by detiling before refresh returns.
+    /// The title-memory snapshot is consumed by detiling before refresh returns.
     static READ: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     #[cfg(test)]
     static FAIL_NEXT_SCRATCH_RESERVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -191,58 +191,53 @@ impl Staging {
         let size = self.layout.size as usize;
         let start = self.memory as usize;
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        let last = &mut *last;
-        if let Some((now, written)) = crate::watch::writes(start, start + size, false) {
-            if last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked) {
-                return 0;
-            }
-            let detiled = READ.with_borrow_mut(|read| {
-                if let Some(additional) = size.checked_sub(read.len()).filter(|&n| n != 0) {
-                    #[cfg(test)]
-                    if FAIL_NEXT_SCRATCH_RESERVE.take() {
-                        return false;
-                    }
-                    if read.try_reserve_exact(additional).is_err() {
-                        once!(size, "no room to read a texture's memory; refresh skipped");
-                        return false;
-                    }
-                    read.resize(size, 0);
-                }
-                // Read through the copy, which handles unmapped pages.
-                crate::host::copy_mapped(read.as_mut_ptr(), self.memory, size, false);
-                self.detile(&read[..size])
-            });
-            if !detiled {
-                return 0;
-            }
-            last.asked = now;
-            #[cfg(feature = "diagnostics")]
-            crate::copystat::add(crate::copystat::C::TexWatched, size as u64);
-            return size;
-        }
-        if !committed(self.memory, size) {
-            #[cfg(feature = "diagnostics")]
-            tracing::debug!(
-                memory = ?self.memory,
-                size,
-                desc = ?self.layout.desc,
-                "a sampled texture's memory is not committed"
-            );
+        let watched = crate::watch::writes(start, start + size, false);
+        if watched.as_ref().is_some_and(|(_, written)| {
+            last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked)
+        }) {
             return 0;
         }
-        // SAFETY: committed memory of the texture's layout size.
-        let tiled = unsafe { std::slice::from_raw_parts(self.memory, size) };
-        let hash = blake3::hash(tiled);
-        #[cfg(feature = "diagnostics")]
-        crate::copystat::add(crate::copystat::C::TexHashed, size as u64);
-        if last.hash == Some(hash) {
-            return size;
-        }
-        last.hash = Some(hash);
-        self.detile(tiled);
-        #[cfg(feature = "diagnostics")]
-        crate::copystat::add(crate::copystat::C::TexChanged, size as u64);
-        size
+        READ.with_borrow_mut(|read| {
+            if let Some(additional) = size.checked_sub(read.len()).filter(|&n| n != 0) {
+                #[cfg(test)]
+                if FAIL_NEXT_SCRATCH_RESERVE.take() {
+                    return 0;
+                }
+                if read.try_reserve_exact(additional).is_err() {
+                    once!(size, "no room to read a texture's memory; refresh skipped");
+                    return 0;
+                }
+                read.resize(size, 0);
+            }
+            let read = &mut read[..size];
+            if let Some((now, _)) = watched {
+                crate::host::copy_mapped(read.as_mut_ptr(), self.memory, size, false);
+                if !self.detile(read) {
+                    return 0;
+                }
+                last.asked = now;
+                last.hash = None;
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::add(crate::copystat::C::TexWatched, size as u64);
+                return size;
+            }
+
+            let copied = crate::host::read_mapped(self.memory, read);
+            let hash = blake3::hash(read);
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::add(crate::copystat::C::TexHashed, size as u64);
+            if last.hash == Some(hash) {
+                return copied;
+            }
+            if !self.detile(read) {
+                return 0;
+            }
+            last.hash = Some(hash);
+            last.asked = 0;
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::add(crate::copystat::C::TexChanged, size as u64);
+            copied
+        })
     }
 
     /// Detiles `tiled` (the texture's memory) into the staging buffer.
@@ -486,5 +481,310 @@ mod tests {
 
         // SAFETY: no refresh can use the fixture after this assertion.
         assert_ne!(unsafe { VirtualFree(memory.cast(), 0, MEM_RELEASE) }, 0);
+    }
+}
+
+#[cfg(test)]
+mod residency_tests {
+    use super::*;
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE,
+        VirtualAlloc, VirtualFree,
+    };
+
+    /// RAII guard for a `VirtualAlloc(..., MEM_RESERVE, ...)` address range.
+    struct VirtualRegion {
+        ptr: *mut u8,
+        len: usize,
+    }
+
+    impl VirtualRegion {
+        fn reserve(len: usize) -> Self {
+            // SAFETY: reserves uncommitted virtual address space of `len` bytes, released on drop.
+            let ptr = unsafe { VirtualAlloc(std::ptr::null(), len, MEM_RESERVE, PAGE_NOACCESS) }
+                .cast::<u8>();
+            assert!(!ptr.is_null(), "VirtualAlloc MEM_RESERVE failed");
+            Self { ptr, len }
+        }
+
+        fn commit(&self, offset: usize, len: usize) {
+            assert!(offset.checked_add(len).is_some_and(|end| end <= self.len));
+            // SAFETY: commits pages within our reserved virtual address range.
+            let committed = unsafe {
+                VirtualAlloc(self.ptr.add(offset).cast(), len, MEM_COMMIT, PAGE_READWRITE)
+            };
+            assert!(!committed.is_null(), "VirtualAlloc MEM_COMMIT failed");
+        }
+
+        fn decommit(&self, offset: usize, len: usize) {
+            assert!(offset.checked_add(len).is_some_and(|end| end <= self.len));
+            // SAFETY: decommits pages within our reserved virtual address range.
+            let ok = unsafe { VirtualFree(self.ptr.add(offset).cast(), len, MEM_DECOMMIT) };
+            assert_ne!(ok, 0, "VirtualFree MEM_DECOMMIT failed");
+        }
+
+        /// Writes `bytes` at `offset`; caller must ensure `[offset..offset + bytes.len())` is committed.
+        unsafe fn write_slice(&self, offset: usize, bytes: &[u8]) {
+            assert!(
+                offset
+                    .checked_add(bytes.len())
+                    .is_some_and(|end| end <= self.len)
+            );
+            // SAFETY: caller guarantees the destination range is committed and writable.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptr.add(offset), bytes.len());
+            }
+        }
+    }
+
+    impl Drop for VirtualRegion {
+        fn drop(&mut self) {
+            // SAFETY: `self.ptr` was allocated with `VirtualAlloc(..., MEM_RESERVE, ...)` and not yet freed.
+            unsafe { VirtualFree(self.ptr.cast(), 0, MEM_RELEASE) };
+        }
+    }
+
+    /// RAII guard releasing a console COM resource so `STAGING` entries are cleaned up on drop.
+    struct ResourceGuard(This);
+
+    impl Drop for ResourceGuard {
+        fn drop(&mut self) {
+            type Release = extern "system" fn(This) -> u32;
+            crate::object::slot::<Release>(self.0, 0x10)(self.0);
+        }
+    }
+
+    fn readback_mip(
+        host: &crate::host::Host,
+        resource: This,
+        host_tex: &ID3D12Resource,
+        subresource: u32,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        let row_pitch = width * 4;
+        assert_eq!(row_pitch % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, 0);
+        let byte_len = row_pitch as usize * height as usize;
+
+        let readback_heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            ..Default::default()
+        };
+        let readback_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Width: byte_len as u64,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            ..Default::default()
+        };
+        let mut readback: Option<ID3D12Resource> = None;
+        // SAFETY: plain creation of a D3D12 readback buffer.
+        unsafe {
+            host.device
+                .CreateCommittedResource(
+                    &readback_heap,
+                    D3D12_HEAP_FLAG_NONE,
+                    &readback_desc,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut readback,
+                )
+                .unwrap();
+        }
+        let readback = readback.unwrap();
+
+        let back = host.new_list().unwrap();
+        crate::list::ensure_state(&back, resource, 0x800);
+        let to = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a borrowed pointer the location never releases.
+            pResource: unsafe { std::mem::transmute_copy(&readback) },
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                    Offset: 0,
+                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                        Width: width,
+                        Height: height,
+                        Depth: 1,
+                        RowPitch: row_pitch,
+                    },
+                },
+            },
+        };
+        let from = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: a borrowed pointer the location never releases.
+            pResource: unsafe { std::mem::transmute_copy(host_tex) },
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: subresource,
+            },
+        };
+        // SAFETY: `back.list` is open and both resources are live.
+        unsafe { back.list.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
+        back.close();
+        host.execute(&[&back]);
+
+        let mut mapped = std::ptr::null_mut();
+        let range = D3D12_RANGE {
+            Begin: 0,
+            End: byte_len,
+        };
+        // SAFETY: `host.execute` waited for GPU completion and the buffer spans `byte_len` bytes.
+        unsafe {
+            readback.Map(0, Some(&range), Some(&mut mapped)).unwrap();
+            let out = std::slice::from_raw_parts(mapped.cast::<u8>(), byte_len).to_vec();
+            readback.Unmap(0, None);
+            out
+        }
+    }
+
+    #[test]
+    fn partially_resident_mip_tail_uploads_to_host_texture() {
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        use victory_formats::texture::{Dimension, Swizzle, Texture, TextureDesc};
+
+        let tex = Texture::new(&TextureDesc {
+            dimension: Dimension::Tex2d,
+            width: 256,
+            height: 256,
+            depth_or_array: 1,
+            mips: 3,
+            format: DXGI_FORMAT_R8G8B8A8_UNORM.0 as u32,
+            samples: 1,
+            swizzle: Swizzle::SW_64KB_S,
+        })
+        .unwrap();
+        let layout = &tex.planes[0].layout;
+        assert_eq!(layout.first_tail_mip, 2);
+        assert_eq!(layout.mips[2].offset, 0);
+        assert!(layout.mips[2].tail.is_some());
+        assert_eq!(layout.mips[1].offset, 65536);
+        assert_eq!(layout.mips[0].offset, 131072);
+        assert_eq!(layout.size, 393216);
+
+        let region = VirtualRegion::reserve(layout.size as usize);
+        region.commit(0, 65536);
+
+        let expected_mip2: Vec<u8> = (0..64 * 64 * 4)
+            .map(|i| (((i * 13 + 7) % 251) as u8) | 1)
+            .collect();
+        let mut tiled = vec![0u8; layout.size as usize];
+        layout
+            .tile(&mut tiled, 2, 0, &expected_mip2, 256, 64 * 256)
+            .unwrap();
+        assert!(tiled[65536..].iter().all(|&b| b == 0));
+        // SAFETY: tile 0 `[0..65536)` was committed above.
+        unsafe { region.write_slice(0, &tiled[..65536]) };
+        assert!(!committed(region.ptr, layout.size as usize));
+
+        const _: () =
+            assert!(size_of::<D3D12_RESOURCE_DESC>() == size_of::<crate::resource::ResourceDesc>());
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Alignment: 0,
+            Width: 256,
+            Height: 256,
+            DepthOrArraySize: 1,
+            MipLevels: 3,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT(0x109),
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let start = region.ptr as usize;
+        assert!(crate::watch::writes(start, start + layout.size as usize, false).is_none());
+
+        let mut resource = std::ptr::null();
+        let hr = crate::resource::create_at_address(
+            std::ptr::null(),
+            region.ptr as u64,
+            (&raw const desc).cast(),
+            0,
+            std::ptr::null(),
+            &crate::resource::PAGEABLE_IIDS[0],
+            &mut resource,
+        );
+        assert_eq!(hr, crate::object::S_OK);
+        let resource_guard = ResourceGuard(resource);
+        let host_tex = crate::resource::host_resource(resource_guard.0).unwrap();
+
+        let submit_upload = || {
+            let list = host.new_list().unwrap();
+            upload(&list, resource_guard.0, host_tex);
+            list.close();
+            assert_eq!(host.execute_checked(&[&list]), None);
+        };
+        submit_upload();
+
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 2, 64, 64) == expected_mip2,
+            "resident mip tail must survive upload"
+        );
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 1, 128, 128)
+                .iter()
+                .all(|&b| b == 0)
+        );
+
+        // Stream in mip 1 while leaving mip 0 `[131072..393216)` unmapped.
+        region.commit(65536, 65536);
+        let expected_mip1: Vec<u8> = (0..128 * 128 * 4)
+            .map(|i| (((i * 29 + 19) % 241) as u8) | 1)
+            .collect();
+        tiled.fill(0);
+        layout
+            .tile(&mut tiled, 1, 0, &expected_mip1, 512, 128 * 512)
+            .unwrap();
+        // SAFETY: tile 1 `[65536..131072)` was committed above.
+        unsafe { region.write_slice(65536, &tiled[65536..131072]) };
+        assert!(!committed(region.ptr, layout.size as usize));
+
+        submit_upload();
+
+        assert_eq!(
+            readback_mip(host, resource_guard.0, host_tex, 1, 128, 128),
+            expected_mip1
+        );
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 2, 64, 64) == expected_mip2,
+            "resident mip tail must survive upload"
+        );
+
+        // Evict mip 1 while leaving the mip tail mapped.
+        region.decommit(65536, 65536);
+        submit_upload();
+
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 1, 128, 128)
+                .iter()
+                .all(|&b| b == 0)
+        );
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 2, 64, 64) == expected_mip2,
+            "resident mip tail must survive upload"
+        );
+
+        region.decommit(0, 65536);
+        submit_upload();
+        assert!(
+            readback_mip(host, resource_guard.0, host_tex, 2, 64, 64)
+                .iter()
+                .all(|&b| b == 0),
+            "entirely evicted mip tail must not retain its old pixels"
+        );
     }
 }
