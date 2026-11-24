@@ -145,3 +145,33 @@ Two upstream fixes helped startup on NVIDIA. Nostyxx remapped descriptor tables 
 - `e:\gta6\ODPAL_SCARLETTPORT.bat` — szybkie uruchamianie ScarlettPort.
 - `e:\gta6\ODPAL_GTA6.bat` — szybkie uruchamianie VIctory/Causeway + Steam.
 - `e:\gta6\dodaj_do_steama.py` / `DODAJ_DO_STEAMA.bat` — dodawanie skrótu GTA VI z okładkami do Steam.
+
+## Poradnik uruchomienia krok po kroku (Tutorial)
+
+### 1. Uruchomienie przez Launcher GUI (zalecane)
+1. Otwórz launcher `e:\gta6\kripus_launcher.ps1` (kliknij prawym -> *Uruchom za pomocą programu PowerShell* lub skrótem).
+2. Wybierz jeden z trybów na liście:
+   - **🌴 ScarlettPort (RTX 3060) + Światło Zastępcze (`NOWE`)** — **zalecany na start**. Automatycznie przechodzi przez menu (`-AutoInput`) i włącza zastępcze oświetlenie otwartego świata (`VICTORY_FALLBACK_LIGHT=1`: niebo, słońce, mgła, budynki).
+   - **🎨 ScarlettPort — Debug Color View (`-DebugView`)** — wyświetla surowe bufory geometrii 3D w kolorach debugowych.
+   - **🎮 Xbox Series S @ 1080p 60 FPS** — klasyczny runtime `VIctory/Causeway` (`clean-base-v2`).
+   - **🛠️ Tryb Diagnostyczny** — uruchamia `diag\victory.exe` z warstwą debugowania D3D12 i pełnym logowaniem.
+3. Kliknij **URUCHOM GRĘ**.
+4. **Cierpliwości przy pierwszym ładowaniu:** kompilacja shaderów po menu może zająć kilka minut, a w otwartym świecie FPS na RTX 3060/3060 Ti spada obecnie do ok. **~1 FPS**. Dopóki w konsoli pojawiają się logi, gra pracuje i nie należy jej zamykać.
+
+### 2. Szybkie uruchomienie bez GUI (`.bat`)
+- **ScarlettPort:** uruchom `e:\gta6\ODPAL_SCARLETTPORT.bat` i wciśnij `Enter` (opcja `[1] AutoInput + Światło zastępcze`).
+- **VIctory / Causeway:** uruchom `e:\gta6\ODPAL_GTA6.bat` i wybierz opcję `[1]` (Series S 1080p), `[5]` (Tryb Diagnostyczny) lub `[6]` (Steam).
+
+### 3. Integracja ze Steam (status *"W grze: Grand Theft Auto VI"*)
+1. W launcherze kliknij przycisk **Dodaj / Odśwież w Steam** (lub uruchom `e:\gta6\DODAJ_DO_STEAMA.bat`).
+2. Zrestartuj aplikację Steam (zamknij całkowicie z zasobnika systemowego i uruchom ponownie).
+3. Gra pojawi się w bibliotece Steam z okładką, banerem i ikoną.
+
+### 4. Sterowanie
+- **Pad Xbox (XInput):** działa natywnie od razu po uruchomieniu.
+- **Klawiatura:** `W A S D` (lewy analog), `I J K L` (prawy analog), `Enter` (`A`), `Backspace` (`B`), `X` / `Y`, `Q` / `E` (bumpery), `Z` / `C` (triggery), `Esc` (Menu).
+
+### 5. Gdzie szukać logów i jak rozwiązywać problemy
+- **Logi ScarlettPort:** `e:\gta6\ScarlettPort\logs\victory-*.log`
+- **Logi crashy VIctory/Causeway:** `E:\gta6\victory-data\data\7952987A\crashes.log`
+- Jeśli po aktualizacji pojawi się błąd GPU lub zawieszenie w menu, użyj przycisku **Wyczyść Cache Shaderów** w launcherze lub uruchom **Tryb Diagnostyczny** (`[5]`), który zapisze dokładny powód w `crashes.log`.
