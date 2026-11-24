@@ -48,13 +48,18 @@ pub(crate) struct Staging {
 }
 
 /// What a texture's staging buffer holds: the hash of the memory detiled
-/// (memory not watched), or the write-watch asking it was detiled after,
-/// with room to read the memory into.
+/// (memory not watched), or the write-watch asking it was detiled after.
 #[derive(Default)]
 struct Last {
     hash: Option<blake3::Hash>,
     asked: u64,
-    read: Vec<u8>,
+}
+
+thread_local! {
+    /// The watched-memory snapshot is consumed by detiling before refresh returns.
+    static READ: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    #[cfg(test)]
+    static FAIL_NEXT_SCRATCH_RESERVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 // SAFETY: the staging mapping is written only at submission, under
@@ -191,12 +196,26 @@ impl Staging {
             if last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked) {
                 return 0;
             }
+            let detiled = READ.with_borrow_mut(|read| {
+                if let Some(additional) = size.checked_sub(read.len()).filter(|&n| n != 0) {
+                    #[cfg(test)]
+                    if FAIL_NEXT_SCRATCH_RESERVE.take() {
+                        return false;
+                    }
+                    if read.try_reserve_exact(additional).is_err() {
+                        once!(size, "no room to read a texture's memory; refresh skipped");
+                        return false;
+                    }
+                    read.resize(size, 0);
+                }
+                // Read through the copy, which handles unmapped pages.
+                crate::host::copy_mapped(read.as_mut_ptr(), self.memory, size, false);
+                self.detile(&read[..size])
+            });
+            if !detiled {
+                return 0;
+            }
             last.asked = now;
-            // Read through the copy, which stands unmapped pages: memory of
-            // big pools is too slow to ask page by page.
-            last.read.resize(size, 0);
-            crate::host::copy_mapped(last.read.as_mut_ptr(), self.memory, size, false);
-            self.detile(&last.read);
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::TexWatched, size as u64);
             return size;
@@ -227,7 +246,7 @@ impl Staging {
     }
 
     /// Detiles `tiled` (the texture's memory) into the staging buffer.
-    fn detile(&self, tiled: &[u8]) {
+    fn detile(&self, tiled: &[u8]) -> bool {
         #[cfg(feature = "diagnostics")]
         if tiled.iter().all(|&b| b == 0) {
             tracing::debug!(
@@ -250,9 +269,10 @@ impl Staging {
                     .detile(tiled, mip, slice, linear, pitch, pitch * rows as usize)
             {
                 tracing::warn!(?e, mip, slice, "texture not detiled");
-                return;
+                return false;
             }
         }
+        true
     }
 }
 
@@ -341,4 +361,130 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
     });
     map.insert(resource as usize, s.clone());
     Some(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use victory_formats::texture::{Dimension, Swizzle, Texture, TextureDesc};
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+    };
+
+    #[test]
+    fn watched_texture_scratch_reuses_storage_and_retries_failed_refresh() {
+        let Some(host) = host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        const MEM_WRITE_WATCH: u32 = 0x0020_0000;
+        // SAFETY: allocate two committed, independently watched blocks.
+        let memory: *mut u8 = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                128 << 10,
+                MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
+                PAGE_READWRITE,
+            )
+            .cast()
+        };
+        assert!(!memory.is_null());
+        let stage = |width, memory: *mut u8| {
+            let layout = Texture::new(&TextureDesc {
+                dimension: Dimension::Tex2d,
+                width,
+                height: 1,
+                depth_or_array: 1,
+                mips: 1,
+                format: 28,
+                samples: 1,
+                swizzle: Swizzle::LINEAR,
+            })
+            .unwrap()
+            .planes
+            .remove(0)
+            .layout;
+            let pitch = (width * 4).next_multiple_of(256);
+            let (buffer, data) = host.upload_buffer(u64::from(pitch)).unwrap();
+            Staging {
+                buffer,
+                #[cfg(feature = "diagnostics")]
+                size: u64::from(pitch),
+                data,
+                footprints: vec![D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                        Width: width,
+                        Height: 1,
+                        Depth: 1,
+                        RowPitch: pitch,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                rows: vec![1],
+                layout,
+                mips: 1,
+                memory,
+                last: Mutex::default(),
+            }
+        };
+        let first = stage(128, memory);
+        // SAFETY: the second block is inside the same allocation.
+        let second = stage(4, unsafe { memory.add(64 << 10) });
+        let fill = |staging: &Staging, value| {
+            // SAFETY: both watched allocations cover their layouts.
+            unsafe {
+                staging
+                    .memory
+                    .cast_mut()
+                    .write_bytes(value, staging.layout.size as usize)
+            };
+        };
+        let check = |staging: &Staging, n, value| {
+            // SAFETY: the mapped upload buffer covers the requested pixel bytes.
+            assert!(
+                unsafe { std::slice::from_raw_parts(staging.data, n) }
+                    .iter()
+                    .all(|&b| b == value)
+            );
+        };
+        fill(&first, 0x25);
+        fill(&second, 0xd3);
+        assert_eq!(first.refresh_now(), first.layout.size as usize);
+        let high_water = READ.with_borrow(|read| (read.as_ptr(), read.len()));
+        assert_eq!(second.refresh_now(), second.layout.size as usize);
+        assert_eq!(
+            READ.with_borrow(|read| (read.as_ptr(), read.len())),
+            high_water
+        );
+        check(&first, 512, 0x25);
+        check(&second, 16, 0xd3);
+
+        // Simulate a refresh thread with only the smaller snapshot allocated.
+        READ.with_borrow_mut(|read| *read = Vec::new());
+        fill(&second, 0xca);
+        assert_eq!(second.refresh_now(), second.layout.size as usize);
+        assert!(READ.with_borrow(|read| read.capacity()) < first.layout.size as usize);
+
+        let asked = first.last.lock().unwrap().asked;
+        fill(&first, 0x87);
+        FAIL_NEXT_SCRATCH_RESERVE.set(true);
+        assert_eq!(first.refresh_now(), 0);
+        assert!(
+            !FAIL_NEXT_SCRATCH_RESERVE.get(),
+            "growth reached the injection"
+        );
+        assert_eq!(
+            READ.with_borrow(|read| read.len()),
+            second.layout.size as usize
+        );
+        assert_eq!(first.last.lock().unwrap().asked, asked);
+        check(&first, 512, 0x25);
+        assert_eq!(first.refresh_now(), first.layout.size as usize);
+        check(&first, 512, 0x87);
+        assert_eq!(first.refresh_now(), 0);
+
+        // SAFETY: no refresh can use the fixture after this assertion.
+        assert_ne!(unsafe { VirtualFree(memory.cast(), 0, MEM_RELEASE) }, 0);
+    }
 }
