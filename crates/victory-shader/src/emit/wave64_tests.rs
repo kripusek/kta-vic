@@ -852,6 +852,43 @@ mod gpu {
     }
 
     #[test]
+    fn complemented_compare_mask_keeps_inactive_bits() {
+        // Narrow EXEC to the first few lanes, invert the saved comparison as
+        // a scalar, then restore EXEC so every lane can report the result.
+        let host = Host::new(true).ok().filter(Host::supports_wave32);
+        for count in [1, 5, 17] {
+            let mut code = vec![
+                v_cmp_gt_u32(inline_u(count), 0),
+                s_mov_b32(EXEC_LO, VCC),
+                sop2(6, 0x12, VCC, NEG_ONE), // s_xor_b32 s6, vcc_lo, -1
+                s_mov_b32(EXEC_LO, NEG_ONE),
+                v_mov_b32(1, 6),
+            ];
+            emit_uav_store(&mut code, 1, 0);
+            code.push(S_ENDPGM);
+            let mut program = make_cs_program(&code, [32, 1, 1], 0, false);
+            program.wave64 = false;
+            let shader = emit_cs(&program, Wave64Mode::Native).unwrap();
+            if let Some(host) = &host {
+                let (root, pso) = host.compute_pipeline(&shader).unwrap();
+                let out = host
+                    .dispatch(
+                        &root,
+                        &pso,
+                        &Dispatch {
+                            roots: Vec::new(),
+                            views: &[View::RawUav(32)],
+                            samplers: &[],
+                            groups: [1, 1, 1],
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(out[0], [u32::MAX << count; 32]);
+            }
+        }
+    }
+
+    #[test]
     fn gpu_32_threads_wave32_fast_path_with_high_lane_spill() {
         // 32-thread Wave64 compute shader: Wave32 uses single wave + zero LDS scratch,
         // while still resolving constant-lane SGPR spill at lane 45 (>= 32).

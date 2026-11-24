@@ -878,6 +878,10 @@ fn effects(
                 regs(o, &mut r)?;
             }
             if let Some(d) = dst {
+                // A 16-bit read keeps the other half of its VGPR.
+                if name.starts_with("ds_read") && name.contains("_d16") {
+                    regs(d, &mut r)?;
+                }
                 regs(d, &mut w)?;
             }
             if *gds

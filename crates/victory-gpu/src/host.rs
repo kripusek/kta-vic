@@ -4,10 +4,10 @@
 //! shortcut: every submission is waited for, so CPU and GPU never overlap;
 //! overlap them with per-submission fences once more than clears run.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -16,6 +16,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, PCWSTR, w};
+
+mod compositor;
+use compositor::Compositor;
 
 /// Resource states without the console's own bits (compression hints from
 /// bit 25 up), which the host rejects.
@@ -54,7 +57,7 @@ pub(crate) struct Host {
     /// layer's messages.
     messages: Option<ID3D12InfoQueue>,
     next_rtv: AtomicU32,
-    presenter: Mutex<Option<Presenter>>,
+    presentation: Mutex<Presentation>,
 }
 
 // SAFETY: D3D12 devices, queues, fences and descriptor heaps are
@@ -180,6 +183,11 @@ pub(crate) fn host() -> Option<&'static Host> {
 }
 
 fn create() -> windows::core::Result<Host> {
+    let warp = cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_WARP").is_some();
+    create_device(warp)
+}
+
+fn create_device(warp: bool) -> windows::core::Result<Host> {
     // SAFETY: plain D3D12 object creation with valid descriptions.
     unsafe {
         // The debug layer only in builds with diagnostics.
@@ -224,7 +232,7 @@ fn create() -> windows::core::Result<Host> {
         // Diagnostics: the software adapter, on which a shader's wild access
         // is an access violation in this process (a crash report with the
         // address and instruction) instead of a GPU fault and driver reset.
-        if cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_WARP").is_some() {
+        if warp {
             let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
             let adapter: IDXGIAdapter = factory.EnumWarpAdapter()?;
             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
@@ -286,7 +294,7 @@ fn create() -> windows::core::Result<Host> {
             next_dsv: AtomicU32::new(0),
             messages,
             next_rtv: AtomicU32::new(0),
-            presenter: Mutex::new(None),
+            presentation: Mutex::default(),
         })
     }
 }
@@ -427,6 +435,21 @@ struct Deferred {
 }
 
 impl Host {
+    fn poll_submission(&self, value: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            // SAFETY: a live fence; UINT64_MAX is D3D12's device removal sentinel.
+            let completed = unsafe { self.fence.GetCompletedValue() };
+            if completed != u64::MAX && completed >= value {
+                return;
+            }
+            if completed == u64::MAX || std::time::Instant::now() >= deadline {
+                fail(format_args!("host submission fence {value} did not complete"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     /// Whether the host runs mesh shaders at shader model 6.6 (translated
     /// mesh shaders need both); logged once.
     pub(crate) fn mesh_shaders(&self) -> bool {
@@ -507,6 +530,10 @@ impl Host {
         // One submission at a time from preparation to copy-back: snapshots
         // and the ranges shaders write are per host copy, not per submission.
         let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        self.execute_locked(runs, &mut submitted);
+    }
+
+    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) {
         let started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::Submissions, 1);
@@ -544,15 +571,17 @@ impl Host {
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
                 self.queue.ExecuteCommandLists(group);
-                let waited = self
-                    .queue
-                    .Signal(&self.fence, *submitted)
-                    .and_then(|()| self.fence.SetEventOnCompletion(*submitted, self.event));
-                match waited {
-                    Ok(()) => {
-                        WaitForSingleObject(self.event, INFINITE);
-                    }
-                    Err(e) => tracing::warn!(error = %e, "host submission not waited for"),
+                if let Err(e) = self.queue.Signal(&self.fence, *submitted) {
+                    fail(format_args!("could not signal host submission fence: {e}"));
+                }
+                let waited = self.fence.SetEventOnCompletion(*submitted, self.event);
+                let event_signalled =
+                    waited.is_ok() && WaitForSingleObject(self.event, INFINITE) == WAIT_OBJECT_0;
+                let completed = self.fence.GetCompletedValue();
+                if !event_signalled || completed == u64::MAX || completed < *submitted {
+                    // A failed wait or stale event leaves this submission in
+                    // flight. Poll before releasing anything it may still use.
+                    self.poll_submission(*submitted);
                 }
             }
             #[cfg(feature = "diagnostics")]
@@ -1301,12 +1330,11 @@ impl Batch {
 /// Copies title memory at submission. The ranges were checked against their
 /// resources when recorded, but the title may since have unmapped pages of
 /// them (tiled memory, page mappings), which read as zeros here; a title
-/// destination (`title_dst`) that is not all mapped is left alone.
+/// destination (`title_dst`) stops at its first unwritable page.
 ///
-/// The source is read through the kernel (`ReadProcessMemory`), which
-/// reports an unmapped page instead of faulting. Asking `VirtualQuery` first
-/// cost about 2 ms per copy in the title's big pools (it walks the page
-/// tables to the region's end), which made copies run at 100-200 MB/s.
+/// The kernel copy checks both source and destination pages. Querying a
+/// region first can walk page tables across an entire title memory pool,
+/// even for a small copy.
 pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: bool) {
     #[cfg(feature = "diagnostics")]
     match crate::copystat::mode() {
@@ -1318,7 +1346,7 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
         2 => return,
         _ => {}
     }
-    if len == 0 || title_dst && !crate::texture::committed(dst, len) {
+    if len == 0 {
         return;
     }
     if title_dst {
@@ -1335,10 +1363,33 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
     }
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::Fallbacks, 1);
-    if !title_dst && len >= 64 << 10 {
+    if title_dst {
+        copy_title_pieces(src, dst, len);
+    } else if len >= 64 << 10 {
         read_sparse(src, dst, len);
     } else {
         read_pieces(src, dst, len);
+    }
+}
+
+/// Split at both page boundaries so zeroing an unreadable source page
+/// cannot overwrite bytes successfully copied before a destination hole.
+/// Use the kernel for the zero write too: the title can remap a page at
+/// any time, and committed destination pages can still be read-only.
+fn copy_title_pieces(src: *const u8, dst: *mut u8, len: usize) {
+    const PAGE: usize = 4 << 10;
+    static ZERO: [u8; PAGE] = [0; PAGE];
+    let mut offset = 0;
+    while offset < len {
+        let from = src.wrapping_add(offset);
+        let to = dst.wrapping_add(offset);
+        let n = (len - offset)
+            .min(PAGE - from as usize % PAGE)
+            .min(PAGE - to as usize % PAGE);
+        if !read(from, to, n) && !read(ZERO.as_ptr(), to, n) {
+            break;
+        }
+        offset += n;
     }
 }
 
@@ -1400,29 +1451,21 @@ pub(crate) fn read_into(src: *const u8, dst: &mut [u8]) -> bool {
     read(src, dst.as_mut_ptr(), dst.len())
 }
 
-/// Copies `len` bytes from `src` to `dst` unless a source page is not
-/// readable.
+/// Copies `len` bytes in the kernel. Returns false on an unreadable source
+/// or unwritable destination page. Bytes before that page may have arrived.
 fn read(src: *const u8, dst: *mut u8, len: usize) -> bool {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     let mut done = 0;
-    // SAFETY: the destination is mapped writable memory of `len` bytes; the
-    // kernel checks the source.
+    // SAFETY: the caller permits writes to the destination range. The
+    // kernel checks both ranges and handles faults during the copy.
     unsafe { ReadProcessMemory(GetCurrentProcess(), src.cast(), dst.cast(), len, &mut done) != 0 }
 }
 
 /// Copies host memory into title memory after a submission (what shaders
 /// wrote), leaving pages that are not mapped alone.
 pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
-    use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let write = |at: usize, n: usize| {
-        let from = src.wrapping_add(at - dst as usize);
-        let mut done = 0;
-        // SAFETY: the source is our mapped host copy; the kernel checks the
-        // destination.
-        unsafe { WriteProcessMemory(GetCurrentProcess(), at as _, from.cast(), n, &mut done) != 0 }
-    };
+    let write = |at: usize, n: usize| read(src.wrapping_add(at - dst as usize), at as *mut u8, n);
     if len == 0 || write(dst as usize, len) {
         return;
     }
@@ -1446,6 +1489,123 @@ fn for_pieces(start: usize, len: usize, step: usize, mut f: impl FnMut(usize, us
         at = next;
     }
 }
+
+#[cfg(test)]
+mod title_copies {
+    use super::{copy_mapped, write_mapped};
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
+        VirtualAlloc, VirtualFree, VirtualProtect,
+    };
+
+    const BLOCK: usize = 64 << 10;
+
+    /// Three reserved blocks, the first and the last committed and filled
+    /// with `fill`: title memory with an unmapped block in it.
+    fn holed(fill: u8) -> *mut u8 {
+        // SAFETY: a fresh reservation; the committed blocks are ours to fill.
+        unsafe {
+            let base =
+                VirtualAlloc(std::ptr::null(), 3 * BLOCK, MEM_RESERVE, PAGE_NOACCESS).cast::<u8>();
+            assert!(!base.is_null());
+            for block in [0, 2] {
+                let at = base.add(block * BLOCK);
+                assert!(!VirtualAlloc(at.cast(), BLOCK, MEM_COMMIT, PAGE_READWRITE).is_null());
+                at.write_bytes(fill, BLOCK);
+            }
+            base
+        }
+    }
+
+    fn block<'a>(base: *const u8, n: usize) -> &'a [u8] {
+        // SAFETY: tests ask for committed blocks only.
+        unsafe { std::slice::from_raw_parts(base.add(n * BLOCK), BLOCK) }
+    }
+
+    fn release(base: *mut u8) {
+        // SAFETY: a reservation of `holed`.
+        assert_ne!(unsafe { VirtualFree(base.cast(), 0, MEM_RELEASE) }, 0);
+    }
+
+    fn pattern() -> Vec<u8> {
+        (0..3 * BLOCK).map(|i| (i % 251) as u8 + 1).collect()
+    }
+
+    #[test]
+    fn title_copies_reach_mapped_destinations_and_stop_at_unmapped_pages() {
+        let from = pattern();
+        // All mapped: copied, through a destination that was never asked.
+        let to = holed(0xee);
+        copy_mapped(to, from.as_ptr(), BLOCK, true);
+        assert_eq!(block(to, 0), &from[..BLOCK]);
+        release(to);
+        // An unmapped block in the destination: nothing faults, and nothing
+        // arrives from that block on.
+        let to = holed(0xee);
+        copy_mapped(to, from.as_ptr(), 3 * BLOCK, true);
+        assert!(block(to, 2).iter().all(|&b| b == 0xee));
+        release(to);
+        // An unmapped block in the source reads as zeros.
+        let holes = holed(7);
+        let mut to = vec![0xeeu8; 3 * BLOCK];
+        copy_mapped(to.as_mut_ptr(), holes, 3 * BLOCK, true);
+        assert!(to[..BLOCK].iter().all(|&b| b == 7));
+        assert!(to[BLOCK..2 * BLOCK].iter().all(|&b| b == 0));
+        assert!(to[2 * BLOCK..].iter().all(|&b| b == 7));
+        release(holes);
+    }
+
+    #[test]
+    fn title_copies_stop_at_a_read_only_destination_with_unaligned_source() {
+        let from = pattern();
+        let to = holed(0xee);
+        let mut old = 0;
+        // SAFETY: a reservation of `holed`. The first block remains
+        // committed, with its last page read-only.
+        unsafe {
+            assert_ne!(
+                VirtualProtect(to.add(BLOCK - 4096).cast(), 4096, PAGE_READONLY, &mut old),
+                0
+            );
+            copy_mapped(to.add(3), from.as_ptr().add(29), BLOCK - 3, true);
+        }
+        let first = block(to, 0);
+        assert_eq!(&first[..3], &[0xee; 3]);
+        assert_eq!(&first[3..BLOCK - 4096], &from[29..BLOCK - 4096 + 26]);
+        assert!(first[BLOCK - 4096..].iter().all(|&b| b == 0xee));
+        release(to);
+    }
+
+    #[test]
+    fn copy_back_writes_mapped_pages_only() {
+        let from = pattern();
+        let to = holed(0xee);
+        write_mapped(to, from.as_ptr(), 3 * BLOCK);
+        assert_eq!(block(to, 0), &from[..BLOCK]);
+        assert_eq!(block(to, 2), &from[2 * BLOCK..]);
+        release(to);
+        // Neither aligned nor whole: the bytes around the range stay.
+        let to = holed(0xee);
+        // SAFETY: inside the first block.
+        write_mapped(unsafe { to.add(100) }, from.as_ptr(), BLOCK - 300);
+        let first = block(to, 0);
+        assert_eq!(first[100..BLOCK - 200], from[..BLOCK - 300]);
+        let around = first[..100].iter().chain(&first[BLOCK - 200..]);
+        assert!(around.into_iter().all(|&b| b == 0xee));
+        // A page that is mapped but not writable is not written either
+        // (guarded title blocks are opened before they are copied back).
+        let mut old = 0;
+        // SAFETY: a committed block of ours.
+        let protected =
+            unsafe { VirtualProtect(to.add(2 * BLOCK).cast(), BLOCK, PAGE_READONLY, &mut old) };
+        assert_ne!(protected, 0);
+        // SAFETY: the third block.
+        write_mapped(unsafe { to.add(2 * BLOCK) }, from.as_ptr(), BLOCK);
+        assert!(block(to, 2).iter().all(|&b| b == 0xee));
+        release(to);
+    }
+}
+
 
 impl Host {
     /// A buffer in the upload heap, mapped for writing.
@@ -1508,6 +1668,55 @@ fn swap_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
 }
 
 const BUFFERS: u32 = 2;
+
+type PresentationPlan<'a> = ((u32, u32), Option<Vec<compositor::Plane<'a>>>);
+
+/// Select the drawing path before creating or resizing the swap chain.
+fn plan_presentation<'a>(
+    device: &ID3D12Device,
+    primary: D3D12_RESOURCE_DESC,
+    planes: &[(&'a ID3D12Resource, u32)],
+    compositor_ready: impl FnOnce() -> bool,
+) -> Option<PresentationPlan<'a>> {
+    let primary_size = (u32::try_from(primary.Width).ok()?, primary.Height);
+    if planes.len() > 1 {
+        if let Some(sampled) = compositor::prepare_planes(device, planes) {
+            if compositor_ready() {
+                let extent =
+                    sampled
+                        .iter()
+                        .skip(1)
+                        .fold(primary_size, |(w, h), (texture, _, _)| {
+                            // SAFETY: the prepared plane holds a live texture.
+                            let desc = unsafe { texture.GetDesc() };
+                            (w.max(desc.Width as u32), h.max(desc.Height))
+                        });
+                return Some((extent, Some(sampled)));
+            }
+        } else {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!("cannot sample these present planes; trying the primary plane");
+            }
+        }
+    }
+    // CopyResource needs a single 2D subresource matching the swap buffer.
+    let copyable = primary.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && primary.DepthOrArraySize == 1
+        && primary.MipLevels == 1
+        && primary.SampleDesc.Count == 1
+        && primary.SampleDesc.Quality == 0
+        && primary_size.0 != 0
+        && primary_size.1 != 0;
+    copyable.then_some((primary_size, None))
+}
+
+#[derive(Default)]
+struct Presentation {
+    presenter: Option<Presenter>,
+    compositor: Option<Compositor>,
+    failures: Vec<(DXGI_FORMAT, Option<std::time::Instant>)>,
+}
 
 struct Presenter {
     swap_chain: IDXGISwapChain3,
@@ -1641,18 +1850,68 @@ impl Meter {
 }
 
 impl Host {
-    /// Shows `texture`, which is in `state` (a host state) and stays in it,
-    /// as frame `frame` (saved if captures are on). `None` if nothing was
-    /// shown; else, in diagnostics builds, whether the frame was black.
-    pub(crate) fn present(&self, texture: &ID3D12Resource, state: u32, frame: u64) -> Option<bool> {
-        // SAFETY: a live resource.
-        let desc = unsafe { texture.GetDesc() };
-        let Some(format) = swap_format(desc.Format) else {
-            tracing::warn!(format = desc.Format.0, "cannot present this format");
+    /// Shows one or more `planes`, keeping their host states intact and
+    /// compositing planes 1.. on top of
+    /// plane 0 when multiple planes are presented, as frame `frame` (saved if
+    /// captures are on). `None` if nothing was shown; else, in diagnostics
+    /// builds, whether the frame was black.
+    pub(crate) fn present(
+        &self,
+        textures: &[std::sync::Arc<crate::resource::HostTexture>],
+        frame: u64,
+    ) -> Option<(bool, u32)> {
+        // Trackers are read and GPU states restored entirely under the same
+        // lock used by ordinary submission preludes.
+        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        let planes: Vec<_> = textures
+            .iter()
+            .map(|host| (&host.texture, host.state.load(Ordering::Relaxed)))
+            .collect();
+        let &(primary, primary_state) = planes.first()?;
+        // SAFETY: live resources.
+        let primary_desc = unsafe { primary.GetDesc() };
+        let Some(format) = swap_format(primary_desc.Format) else {
+            tracing::warn!(format = primary_desc.Format.0, "cannot present this format");
             return None;
         };
-        let (width, height) = (desc.Width as u32, desc.Height);
-        let mut presenter = self.presenter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut presentation = self.presentation.lock().unwrap_or_else(|e| e.into_inner());
+        let Presentation {
+            presenter,
+            compositor,
+            failures,
+        } = &mut *presentation;
+        let ((width, height), composition) = plan_presentation(
+            &self.device,
+            primary_desc,
+            &planes,
+            || {
+                if compositor.as_ref().is_some_and(|c| c.format == format) {
+                    return true;
+                }
+                let now = std::time::Instant::now();
+                failures.retain(|&(_, retry)| retry.is_none_or(|retry| now < retry));
+                if failures.iter().any(|&(failed, _)| failed == format) {
+                    return false;
+                }
+                match Compositor::new(&self.device, format) {
+                    Ok(comp) => {
+                        *compositor = Some(comp);
+                        true
+                    }
+                    Err(e) => {
+                        use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
+                        let retry = if matches!(e.code(), E_INVALIDARG | E_NOTIMPL) {
+                            None
+                        } else {
+                            Some(now + std::time::Duration::from_secs(5))
+                        };
+                        failures.push((format, retry));
+                        tracing::warn!(error = %e, "no present compositor; trying the primary plane");
+                        false
+                    }
+                }
+            },
+        )?;
         if presenter.is_none() {
             *presenter = match self.presenter(width, height, format) {
                 Ok(p) => Some(p),
@@ -1677,8 +1936,7 @@ impl Host {
                 }
             }
         }
-        let state = D3D12_RESOURCE_STATES(state as i32);
-        // SAFETY: our swap chain, list and a live source texture.
+        // SAFETY: our swap chain, list and live source textures.
         unsafe {
             let index = p.swap_chain.GetCurrentBackBufferIndex();
             let Ok(back) = p.swap_chain.GetBuffer::<ID3D12Resource>(index) else {
@@ -1686,33 +1944,86 @@ impl Host {
             };
             p.copy.reset();
             let list = &p.copy.list;
-            list.ResourceBarrier(&[
-                transition(texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-                transition(
-                    &back,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                ),
-            ]);
-            list.CopyResource(&back, texture);
-            #[cfg(feature = "diagnostics")]
-            let capture = crate::capture::wanted(frame)
-                .then(|| crate::capture::read_back(&self.device, list, texture))
-                .flatten();
-            #[cfg(feature = "diagnostics")]
-            let probe = crate::capture::probe(&self.device, list, texture);
-            #[cfg(not(feature = "diagnostics"))]
-            let _ = frame;
-            list.ResourceBarrier(&[
-                transition(texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state),
-                transition(
-                    &back,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                ),
-            ]);
+            let (capture, probe) = match composition.as_deref() {
+                None => {
+                    let (texture, state) = planes[0];
+                    let state = D3D12_RESOURCE_STATES(state as i32);
+                    let mut before = Vec::with_capacity(2);
+                    if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                        before.push(transition(texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE));
+                    }
+                    before.push(transition(
+                        &back,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                    ));
+                    list.ResourceBarrier(&before);
+                    list.CopyResource(&back, texture);
+                    #[cfg(feature = "diagnostics")]
+                    let capture = crate::capture::wanted(frame)
+                        .then(|| crate::capture::read_back(&self.device, list, texture))
+                        .flatten();
+                    #[cfg(feature = "diagnostics")]
+                    let probe = crate::capture::probe(&self.device, list, texture);
+                    #[cfg(not(feature = "diagnostics"))]
+                    let (capture, probe) = {
+                        let _ = frame;
+                        (None::<()>, None::<()>)
+                    };
+                    let mut after = Vec::with_capacity(2);
+                    if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                        after.push(transition(texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state));
+                    }
+                    after.push(transition(
+                        &back,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                    ));
+                    list.ResourceBarrier(&after);
+                    (capture, probe)
+                }
+                Some(planes) => {
+                    let comp = compositor.as_ref().expect("prepared compositor");
+                    comp.record(
+                        &self.device,
+                        list,
+                        &back,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                        planes,
+                    );
+                    #[cfg(feature = "diagnostics")]
+                    let (capture, probe) = {
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        )]);
+                        let capture = crate::capture::wanted(frame)
+                            .then(|| crate::capture::read_back(&self.device, list, &back))
+                            .flatten();
+                        let probe = crate::capture::probe(&self.device, list, &back);
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_COPY_SOURCE,
+                            D3D12_RESOURCE_STATE_PRESENT,
+                        )]);
+                        (capture, probe)
+                    };
+                    #[cfg(not(feature = "diagnostics"))]
+                    let (capture, probe) = {
+                        let _ = frame;
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_PRESENT,
+                        )]);
+                        (None::<()>, None::<()>)
+                    };
+                    (capture, probe)
+                }
+            };
             p.copy.close();
-            self.execute(&[&p.copy]);
+            self.execute_locked(&[&p.copy], &mut submitted);
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
@@ -1720,9 +2031,12 @@ impl Host {
             let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
             p.meter.frame(p.hwnd);
             #[cfg(feature = "diagnostics")]
-            return Some(probe.is_some_and(|b| crate::capture::black(&b)));
+            return Some((probe.is_some_and(|b| crate::capture::black(&b)), primary_state));
             #[cfg(not(feature = "diagnostics"))]
-            Some(false)
+            {
+                let _ = (capture, probe);
+                Some((false, primary_state))
+            }
         }
     }
 

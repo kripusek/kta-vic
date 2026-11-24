@@ -867,6 +867,10 @@ impl State {
                 once!(slot, "rectangle vertices outside their buffer");
                 return false;
             }
+            if !crate::primitive::rectangle_elements_fit(v.stride, &elements) {
+                once!(slot, "rectangle vertex elements exceed their stride");
+                return false;
+            }
             let Some((gpu, to)) = list.scratch(rects * 6 * stride) else {
                 return false;
             };

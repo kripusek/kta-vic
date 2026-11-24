@@ -1456,9 +1456,12 @@ mod tests {
             };
             h.compute_pipeline(&cs_with_wave_size(required_wave))
                 .expect("recommended Wave64 mode should build a compute PSO");
-            if warp {
-                assert_eq!(mode, Wave64Mode::Emulate);
-            }
+            let lanes = h.wave_range();
+            assert_eq!(mode == Wave64Mode::Native, lanes.is_some_and(|r| r.supports(64)));
+            assert_eq!(
+                mode == Wave64Mode::Emulate,
+                !lanes.is_some_and(|r| r.supports(32) || r.supports(64))
+            );
         }
     }
 }

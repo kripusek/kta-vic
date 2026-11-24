@@ -132,13 +132,52 @@ extern "system" fn execute(_: This, count: u32, lists: *const This) {
     }
 }
 
-/// The start of a present plane: frame token, then the plane's resources.
+/// One plane of a `PresentX` call (`D3D12XBOX_PRESENT_PLANE_PARAMETERS`,
+/// 0x48 bytes): frame token, resource array, view rects, color space,
+/// extended descriptors, and plane flags.
 #[repr(C)]
 pub(crate) struct Plane {
     token: u64,
     count: u32,
     resources: *const This,
+    // Public Ebitengine Xbox binding mirrors these fields at 0x18 and 0x20.
+    source_rects: *const u8,
+    dest_placement: *const u8,
+    _rest: [u64; 4],
 }
+const _: () = {
+    assert!(std::mem::size_of::<Plane>() == 0x48);
+    assert!(std::mem::offset_of!(Plane, source_rects) == 0x18);
+    assert!(std::mem::offset_of!(Plane, dest_placement) == 0x20);
+};
+#[cfg(windows)]
+fn full_source_rect(rect: *const u8, width: u64, height: u32) -> bool {
+    if rect.is_null() {
+        return true;
+    }
+    // D3D12_RECT has four 32-bit signed coordinates. Read only the first
+    // rectangle, for the first resource, through the checked title-memory path.
+    let mut bytes = [0u8; 16];
+    if !crate::host::read_into(rect, &mut bytes) {
+        return false;
+    }
+    let coord = |off| i32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+    coord(0) == 0
+        && coord(4) == 0
+        && u64::try_from(coord(8)).ok() == Some(width)
+        && u32::try_from(coord(12)).ok() == Some(height)
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn present_source_rect_checks_full_texture() {
+    let full = [0i32, 0, 1920, 1080];
+    let crop = [0i32, 0, 1280, 720];
+    assert!(full_source_rect(std::ptr::null(), 1920, 1080));
+    assert!(full_source_rect(full.as_ptr().cast(), 1920, 1080));
+    assert!(!full_source_rect(crop.as_ptr().cast(), 1920, 1080));
+}
+
 /// Submission tagged with the frame it belongs to `(count, lists, frame
 /// token, flags)`; frames are paced elsewhere, so it runs as a plain one.
 extern "system" fn execute_x(this: This, count: u32, lists: *const This, _token: u64, _flags: u32) {
@@ -276,24 +315,61 @@ extern "system" fn present(
     }
     #[cfg(windows)]
     if planes > 0
-        // SAFETY: the title passes `planes` plane descriptions.
-        && let Some(plane) = unsafe { plane_parameters.as_ref() }
-        && plane.count > 0
-        && !plane.resources.is_null()
-        // SAFETY: the plane lists `count` resources.
-        && let resource = unsafe { *plane.resources }
-        && let Some(texture) = crate::resource::host_resource(resource)
+        && !plane_parameters.is_null()
         && let Some(host) = crate::host::host()
     {
-        const COPY_SOURCE: u32 = 0x800;
-        let state = crate::resource::host_transition(resource, COPY_SOURCE)
-            .map_or(COPY_SOURCE, |(_, before)| before);
-        let shown = host.present(texture, state, frame);
-        crate::resource::host_transition(resource, state);
-        #[cfg(feature = "diagnostics")]
-        blinks(frame, resource, state, shown);
-        #[cfg(not(feature = "diagnostics"))]
-        let _ = shown;
+        // SAFETY: the title passes `planes` plane descriptions.
+        let slice = unsafe { std::slice::from_raw_parts(plane_parameters, planes.min(8) as usize) };
+        let mut textures = Vec::with_capacity(slice.len());
+        let mut primary = std::ptr::null();
+        let mut covers_frame = true;
+        for (index, plane) in slice.iter().enumerate() {
+            let resource = if plane.count == 0 || plane.resources.is_null() {
+                std::ptr::null()
+            } else {
+                // SAFETY: the plane lists `count` resources.
+                unsafe { *plane.resources }
+            };
+            let Some(texture) = crate::resource::host_copy(resource) else {
+                if index == 0 {
+                    static WARNED: AtomicBool = AtomicBool::new(false);
+                    if !WARNED.swap(true, Ordering::Relaxed) {
+                        tracing::warn!("PresentX primary plane has no host texture");
+                    }
+                    return S_OK;
+                }
+                continue;
+            };
+            if index == 0 {
+                primary = resource;
+            }
+            if textures.iter().any(|previous: &std::sync::Arc<crate::resource::HostTexture>| {
+                previous.texture == texture.texture
+            }) {
+                continue;
+            }
+            if slice.len() > 1 && covers_frame {
+                // SAFETY: the retained texture is live.
+                let desc = unsafe { texture.texture.GetDesc() };
+                covers_frame = plane.dest_placement.is_null()
+                    && full_source_rect(plane.source_rects, desc.Width, desc.Height);
+            }
+            textures.push(texture);
+        }
+        if !textures.is_empty() {
+            if !covers_frame {
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
+                    tracing::warn!("PresentX has a cropped or placed plane; using primary only");
+                }
+                textures.truncate(1);
+            }
+            let shown = host.present(&textures, frame);
+            #[cfg(feature = "diagnostics")]
+            blinks(frame, primary, shown);
+            #[cfg(not(feature = "diagnostics"))]
+            let _ = (primary, shown);
+        }
     }
     #[cfg(not(windows))]
     let _ = (planes, plane_parameters);
@@ -302,11 +378,11 @@ extern "system" fn present(
 /// Diagnostics: logs a presented frame that is black after one that was
 /// not, with what was presented and how many draws ran since.
 #[cfg(all(windows, feature = "diagnostics"))]
-fn blinks(frame: u64, resource: This, state: u32, shown: Option<bool>) {
+fn blinks(frame: u64, resource: This, shown: Option<(bool, u32)>) {
     static LAST: std::sync::Mutex<(bool, u64, u64)> = std::sync::Mutex::new((false, 0, 0));
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     let drawn = crate::draw::drawn();
-    let black = shown.unwrap_or(false);
+    let (black, state) = shown.unwrap_or_default();
     let draws = crate::draw::take_frame();
     if black && !last.0 {
         last.2 += 1;
