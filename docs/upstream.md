@@ -4,6 +4,8 @@ VI Causeway follows [Marvisak/VIctory](https://github.com/Marvisak/VIctory). The
 
 The next merge included pipeline compilation on worker threads, a persistent D3D12 pipeline library, and indirect draws. [Upstream revision 35b054e](https://github.com/Marvisak/VIctory/commit/35b054ec038c11bc8a0de66b1eee764b1ad4f101)
 
+The November 23 evening sync included upstream's generic Intel cache-writeback handling, the Windows 10 static TLS fix, PE parsing tests and size checks for tiled textures and XMA audio. [Upstream revision 062ad14](https://github.com/Marvisak/VIctory/commit/062ad14eae9b89b972d11568f8307746118fab14) · [Windows 10 loader PR](https://github.com/Marvisak/VIctory/pull/28)
+
 Causeway subsequently picked up Yaekai's patches for null buffer descriptors and the `v_swap_b32` and `v_xnor_b32` shader instructions. Both instructions appeared in world compute shaders on the RTX 3060 Ti. [Upstream PR 57](https://github.com/Marvisak/VIctory/pull/57) · [Upstream PR 58](https://github.com/Marvisak/VIctory/pull/58)
 
 We also tested upstream's wave-size changes against four compute pipelines that the RTX 3060 Ti refused during story loading. All four translated shaders passed DXIL validation. The device accepted the 32-thread pipeline after the change. The three larger pipelines still required 64 lanes and the driver refused them. [Upstream PR 54](https://github.com/Marvisak/VIctory/pull/54)

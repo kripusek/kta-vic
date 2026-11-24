@@ -10,6 +10,8 @@ With upstream's asynchronous pipeline compilation, the RTX 3060 Ti rendered the 
 
 In a release-build comparison on that machine, the opening movie ran at 30 fps. Reusing texture row spans reduced reported texture preparation from 14.8–15.7 to 3.1–3.4 ms per movie frame. A process-only audio capture matched the original soundtrack through its fade with no measurable accumulated delay.
 
+Checking for writes to mapped guest memory was one CPU cost during world rendering. In a native benchmark on the same machine, checking a 6 MiB range inside a 174 MiB mapping took 327 µs before the allocation-query change and 4.3 µs afterward when the range was clean. With one changed page per check, it took 19.7 and 9.2 µs respectively. The effect on world frame time has yet to be measured. [Benchmark and upstream PR](https://github.com/Marvisak/VIctory/pull/119)
+
 On a fresh profile, choose **Settings** at **Finish Setup?** with the controller Menu button or the **Esc** key. The game opens its seven-tab Settings menu before starting the story. We opened Control Scheme, Controller, Gameplay, and Display and used Back to return to setup.
 
 On this Windows 10 and NVIDIA system, a separate Series S trial presented black frames through the player-selection phase. The verified startup above used the Series X profile.
