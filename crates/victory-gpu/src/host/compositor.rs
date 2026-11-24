@@ -25,11 +25,13 @@ impl Compositor {
     pub(super) fn new(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Self> {
         const SOURCE: &str = r#"
             #define RS "DescriptorTable(SRV(t0), visibility=SHADER_VISIBILITY_PIXEL), \
+                        RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_PIXEL), \
                         StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, \
                             addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, \
                             visibility=SHADER_VISIBILITY_PIXEL)"
             Texture2D tex : register(t0);
             SamplerState smp : register(s0);
+            cbuffer Encoding : register(b0) { uint encode_srgb; };
             [RootSignature(RS)]
             void vs(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD) {
                 uv = float2((id << 1) & 2, id & 2);
@@ -37,7 +39,15 @@ impl Compositor {
             }
             [RootSignature(RS)]
             float4 ps(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
-                return tex.Sample(smp, uv);
+                float4 color = tex.Sample(smp, uv);
+                if (encode_srgb != 0) {
+                    // The swap-chain RTV is UNORM. Restore the encoded RGB
+                    // components after sampling through a legal typed SRV.
+                    float3 lo = color.rgb * 12.92;
+                    float3 hi = 1.055 * pow(color.rgb, 1.0 / 2.4) - 0.055;
+                    color.rgb = lerp(lo, hi, step(0.0031308, color.rgb));
+                }
+                return color;
             }
         "#;
         let compile = |entry: PCSTR, target: PCSTR| -> windows::core::Result<ID3DBlob> {
@@ -310,7 +320,12 @@ impl Compositor {
             }]);
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
             list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            for i in 0..count {
+            for (i, &(_, _, format)) in planes.iter().enumerate() {
+                let srgb = matches!(
+                    format,
+                    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+                );
+                list.SetGraphicsRoot32BitConstant(1, u32::from(srgb), 0);
                 list.SetPipelineState(if i == 0 { &self.opaque } else { &self.overlay });
                 list.SetGraphicsRootDescriptorTable(
                     0,
@@ -501,6 +516,91 @@ mod tests {
             super::super::plan_presentation(&host.device, unsafe_copy, &planes, || false,)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn warp_srgb_primary_matches_a_raw_copy() {
+        let host = super::super::create_device(true).expect("software WARP host");
+        let compositor = Compositor::new(&host.device, FORMAT).expect("compositor");
+        let make_texture = |format, flags, state| texture(&host.device, 2, 2, state, flags, format);
+        let primary = make_texture(
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            D3D12_RESOURCE_FLAG_NONE,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        );
+        let overlay = make_texture(
+            FORMAT,
+            D3D12_RESOURCE_FLAG_NONE,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        );
+        let raw = make_texture(
+            FORMAT,
+            D3D12_RESOURCE_FLAG_NONE,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        );
+        let back = make_texture(
+            FORMAT,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+        let primary_pixels = [
+            [128, 128, 128, 255],
+            [1, 10, 11, 255],
+            [32, 77, 111, 255],
+            [250, 191, 199, 255],
+        ];
+        let run = host.new_list().expect("offscreen list");
+        let list = &run.list;
+        let _base_upload = upload(&host, list, &primary, &primary_pixels);
+        let _overlay_upload = upload(&host, list, &overlay, &[[0; 4]; 4]);
+        // SAFETY: live 2x2 textures in COPY_DEST; RGBA8 formats share a type group.
+        unsafe {
+            list.ResourceBarrier(&[transition(
+                &primary,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+            list.CopyResource(&raw, &primary);
+            list.ResourceBarrier(&[transition(
+                &raw,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+        }
+        let planes = [
+            (&primary, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32),
+            (&overlay, D3D12_RESOURCE_STATE_COPY_DEST.0 as u32),
+        ];
+        let prepared = prepare_planes(&host.device, &planes).unwrap();
+        compositor.record(
+            &host.device,
+            list,
+            &back,
+            D3D12_RESOURCE_STATE_COMMON,
+            &prepared,
+        );
+        // SAFETY: composition left the target in RENDER_TARGET on this list.
+        unsafe {
+            list.ResourceBarrier(&[transition(
+                &back,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+        }
+        let copy = crate::capture::read_back(&host.device, list, &raw).unwrap();
+        let result = crate::capture::read_back(&host.device, list, &back).unwrap();
+        // SAFETY: submit the live offscreen list on the WARP queue. Use the
+        // normal fence without registering an event to exercise the fallback.
+        unsafe {
+            list.Close().expect("offscreen list closes");
+            let command_list = list.cast().expect("command list interface");
+            host.queue.ExecuteCommandLists(&[Some(command_list)]);
+            host.queue.Signal(&host.fence, 1).expect("WARP signal");
+        }
+        host.poll_submission(1);
+        assert_eq!(host.log_messages(), None, "D3D12 debug errors");
+        assert_eq!(pixels(copy), primary_pixels);
+        assert_eq!(pixels(result), primary_pixels);
     }
 
     #[test]

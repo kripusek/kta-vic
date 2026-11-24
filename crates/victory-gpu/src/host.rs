@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -438,6 +438,21 @@ struct Deferred {
 }
 
 impl Host {
+    fn poll_submission(&self, value: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            // SAFETY: a live fence; UINT64_MAX is D3D12's device removal sentinel.
+            let completed = unsafe { self.fence.GetCompletedValue() };
+            if completed != u64::MAX && completed >= value {
+                return;
+            }
+            if completed == u64::MAX || std::time::Instant::now() >= deadline {
+                fail(format_args!("host submission fence {value} did not complete"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     /// Whether the host runs mesh shaders at shader model 6.6 (translated
     /// mesh shaders need both); logged once.
     pub(crate) fn mesh_shaders(&self) -> bool {
@@ -519,6 +534,10 @@ impl Host {
         // One submission at a time from preparation to copy-back: snapshots
         // and the ranges shaders write are per host copy, not per submission.
         let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        self.execute_locked(runs, &mut submitted);
+    }
+
+    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) {
         let started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::Submissions, 1);
@@ -556,15 +575,17 @@ impl Host {
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
                 self.queue.ExecuteCommandLists(group);
-                let waited = self
-                    .queue
-                    .Signal(&self.fence, *submitted)
-                    .and_then(|()| self.fence.SetEventOnCompletion(*submitted, self.event));
-                match waited {
-                    Ok(()) => {
-                        WaitForSingleObject(self.event, INFINITE);
-                    }
-                    Err(e) => tracing::warn!(error = %e, "host submission not waited for"),
+                if let Err(e) = self.queue.Signal(&self.fence, *submitted) {
+                    fail(format_args!("could not signal host submission fence: {e}"));
+                }
+                let waited = self.fence.SetEventOnCompletion(*submitted, self.event);
+                let event_signalled =
+                    waited.is_ok() && WaitForSingleObject(self.event, INFINITE) == WAIT_OBJECT_0;
+                let completed = self.fence.GetCompletedValue();
+                if !event_signalled || completed == u64::MAX || completed < *submitted {
+                    // A failed wait or stale event leaves this submission in
+                    // flight. Poll before releasing anything it may still use.
+                    self.poll_submission(*submitted);
                 }
             }
             #[cfg(feature = "diagnostics")]
@@ -1725,7 +1746,7 @@ fn plan_presentation<'a>(
 struct Presentation {
     presenter: Option<Presenter>,
     compositor: Option<Compositor>,
-    failed_formats: Vec<DXGI_FORMAT>,
+    failures: Vec<(DXGI_FORMAT, Option<std::time::Instant>)>,
 }
 
 struct Presenter {
@@ -1860,13 +1881,24 @@ impl Meter {
 }
 
 impl Host {
-    /// Shows one or more `planes` (each a live host texture and its current
-    /// host state, kept in that state), compositing planes 1.. on top of
+    /// Shows one or more `planes`, keeping their host states intact and
+    /// compositing planes 1.. on top of
     /// plane 0 when multiple planes are presented, as frame `frame` (saved if
     /// captures are on). `None` if nothing was shown; else, in diagnostics
     /// builds, whether the frame was black.
-    pub(crate) fn present(&self, planes: &[(&ID3D12Resource, u32)], frame: u64) -> Option<bool> {
-        let &(primary, _) = planes.first()?;
+    pub(crate) fn present(
+        &self,
+        textures: &[std::sync::Arc<crate::resource::HostTexture>],
+        frame: u64,
+    ) -> Option<(bool, u32)> {
+        // Trackers are read and GPU states restored entirely under the same
+        // lock used by ordinary submission preludes.
+        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        let planes: Vec<_> = textures
+            .iter()
+            .map(|host| (&host.texture, host.state.load(Ordering::Relaxed)))
+            .collect();
+        let &(primary, primary_state) = planes.first()?;
         // SAFETY: live resources.
         let primary_desc = unsafe { primary.GetDesc() };
         let Some(format) = swap_format(primary_desc.Format) else {
@@ -1877,17 +1909,19 @@ impl Host {
         let Presentation {
             presenter,
             compositor,
-            failed_formats,
+            failures,
         } = &mut *presentation;
         let ((width, height), composition) = plan_presentation(
             &self.device,
             primary_desc,
-            planes,
+            &planes,
             || {
                 if compositor.as_ref().is_some_and(|c| c.format == format) {
                     return true;
                 }
-                if failed_formats.contains(&format) {
+                let now = std::time::Instant::now();
+                failures.retain(|&(_, retry)| retry.is_none_or(|retry| now < retry));
+                if failures.iter().any(|&(failed, _)| failed == format) {
                     return false;
                 }
                 match Compositor::new(&self.device, format) {
@@ -1896,7 +1930,13 @@ impl Host {
                         true
                     }
                     Err(e) => {
-                        failed_formats.push(format);
+                        use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
+                        let retry = if matches!(e.code(), E_INVALIDARG | E_NOTIMPL) {
+                            None
+                        } else {
+                            Some(now + std::time::Duration::from_secs(5))
+                        };
+                        failures.push((format, retry));
                         tracing::warn!(error = %e, "no present compositor; trying the primary plane");
                         false
                     }
@@ -2014,7 +2054,7 @@ impl Host {
                 }
             };
             p.copy.close();
-            self.execute(&[&p.copy]);
+            self.execute_locked(&[&p.copy], &mut submitted);
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
@@ -2022,11 +2062,11 @@ impl Host {
             let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
             p.meter.frame(p.hwnd);
             #[cfg(feature = "diagnostics")]
-            return Some(probe.is_some_and(|b| crate::capture::black(&b)));
+            return Some((probe.is_some_and(|b| crate::capture::black(&b)), primary_state));
             #[cfg(not(feature = "diagnostics"))]
             {
                 let _ = (capture, probe);
-                Some(false)
+                Some((false, primary_state))
             }
         }
     }
