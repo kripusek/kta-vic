@@ -120,7 +120,7 @@ pub extern "system" fn XMemVirtualAlloc(
     }
     // SAFETY: the title's own arguments, cleaned of console bits; the
     // parameter points at `requirements`, which outlives the call.
-    let at = unsafe {
+    let mut at = unsafe {
         VirtualAlloc2(
             GetCurrentProcess(),
             base,
@@ -135,6 +135,26 @@ pub extern "system" fn XMemVirtualAlloc(
             constrained.into(),
         )
     };
+    if at.is_null() && constrained {
+        tracing::warn!(
+            size,
+            kind = format_args!("{kind:#x}"),
+            flags = format_args!("{flags:#x}"),
+            "XMemVirtualAlloc constrained allocation failed; falling back to unconstrained VirtualAlloc2"
+        );
+        // SAFETY: identical arguments without the restrictive 32-bit or lower-bound address requirements.
+        at = unsafe {
+            VirtualAlloc2(
+                GetCurrentProcess(),
+                base,
+                size,
+                kind,
+                protect,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+    }
     if base.is_null() {
         tracing::debug!(
             size,
