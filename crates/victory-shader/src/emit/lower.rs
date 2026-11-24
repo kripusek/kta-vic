@@ -301,6 +301,11 @@ enum MaskData {
 /// What a value holding a lane mask read as a number stops with.
 const LANE_MASK: Why = "a lane mask read as data";
 
+/// Samples whose level comes from derivatives across each quad of lanes.
+fn implicit_derivatives(name: &str) -> bool {
+    matches!(name, "image_sample" | "image_sample_cl" | "image_sample_b" | "image_sample_b_cl")
+}
+
 /// Instructions that read a lane mask (not EXEC implicitly, not a lane's
 /// bit) as a number.
 fn reads_mask_as_data(st: &Structured, i: &Inst) -> bool {
@@ -1032,6 +1037,7 @@ impl<'a> Lower<'a> {
                         || n.starts_with("v_mbcnt")
                         || matches!(n, "v_readlane_b32" | "v_writelane_b32")
                         || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
+                        || implicit_derivatives(n)
                         || reads_mask_as_data(x.st, i)
                         || numeric_masks && (numeric_select(x.st, i) || numeric_mask_alu(x.st, i))
                 })
@@ -3331,6 +3337,42 @@ impl<'a> Lower<'a> {
         )
     }
 
+    /// Coarse derivatives of `coords` across this lane's quad, as DXIL
+    /// gradients (x for up to three coordinates, then y), each times
+    /// `scale` if given.
+    fn quad_gradients(&mut self, coords: &[V], scale: Option<V>) -> Vec<V> {
+        let c = self.cur;
+        // Four consecutive lanes fit inside both a native 32- and 64-lane wave.
+        let lane = self.host_lane_index();
+        let top = self.s.m.i32(!3);
+        let base = self.s.m.bin(c, Bin::And, lane, top);
+        let lanes: Vec<V> = (1..3u32)
+            .map(|k| {
+                let k = self.s.m.i32(k);
+                self.s.m.bin(c, Bin::Or, base, k)
+            })
+            .collect();
+        let fu = self.s.m.undef(self.s.t.f32);
+        let mut g = vec![fu; 6];
+        for (k, &x) in coords.iter().enumerate().take(3) {
+            let xi = self.as_int(x);
+            let at = |l: &mut Self, lane: V| {
+                let r = l.read_lane(xi, lane);
+                l.as_float(r)
+            };
+            let origin = at(self, base);
+            for (d, &lane) in lanes.iter().enumerate() {
+                let there = at(self, lane);
+                let mut diff = self.s.m.bin(c, Bin::Sub, there, origin);
+                if let Some(s) = scale {
+                    diff = self.s.m.bin(c, Bin::Mul, diff, s);
+                }
+                g[3 * d + k] = diff;
+            }
+        }
+        g
+    }
+
     /// The float value of a register value.
     fn float_of(&mut self, v: Value) -> Result<V, Why> {
         if let Some(&f) = self.floats.get(&v) {
@@ -4200,6 +4242,68 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// Two scalar loads of the same dwords: same opcode and immediate
+    /// offset, base read from the same values, and the same or an
+    /// equivalent register offset.
+    fn twin_loads(&self, a: Site, b: Site) -> bool {
+        let (ia, ib): (&Inst, &Inst) = (
+            &self.x.p.blocks[a.0].insts[a.1],
+            &self.x.p.blocks[b.0].insts[b.1],
+        );
+        let (
+            Fields::Smem {
+                base: Operand::Scalar { code: ba, .. },
+                offset: oa,
+                soffset: sa,
+                ..
+            },
+            Fields::Smem {
+                base: Operand::Scalar { code: bb, .. },
+                offset: ob,
+                soffset: sb,
+                ..
+            },
+        ) = (&ia.fields, &ib.fields)
+        else {
+            return false;
+        };
+        let same_base = (0..2).all(|k| {
+            let va = ia.read(Reg::S(ba + k));
+            va.is_some() && va == ib.read(Reg::S(bb + k))
+        });
+        let same_soffset = match (sa, sb) {
+            (Operand::Scalar { code: NULL, .. }, Operand::Scalar { code: NULL, .. }) => true,
+            (Operand::Scalar { code: ca, .. }, Operand::Scalar { code: cb, .. }) => {
+                match (ia.read(Reg::S(*ca)), ib.read(Reg::S(*cb))) {
+                    (Some(x), Some(y)) => self.same_scalar(x, y),
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        ia.name() == ib.name() && oa == ob && same_base && same_soffset
+    }
+
+    /// The same value, or two `v_readfirstlane_b32` of the same VGPR value
+    /// (each waterfall loop reads the index anew).
+    fn same_scalar(&self, x: Value, y: Value) -> bool {
+        if x == y {
+            return true;
+        }
+        let first_lane_of = |v: Value| {
+            self.x.p.blocks[*self.def_block.get(&v)?].insts.iter()
+                .find(|i| i.writes.iter().any(|w| w.1 == v))
+                .filter(|i| i.name() == "v_readfirstlane_b32")
+                .and_then(|i| {
+                    i.reads
+                        .iter()
+                        .find(|r| matches!(r.0, Reg::V(_)))
+                        .map(|r| r.1)
+                })
+        };
+        matches!((first_lane_of(x), first_lane_of(y)), (Some(a), Some(b)) if a == b)
+    }
+
     /// A descriptor load (`s_load_dword*` from a table or heap) whose dwords
     /// the code also reads as numbers: the console compiler computes sizes
     /// from descriptor bits (an image's width, height, depth, levels; a
@@ -4263,6 +4367,13 @@ impl<'a> Lower<'a> {
                 break;
             }
         }
+        let use_at = use_at.or_else(|| {
+            self.x.res.descriptors.iter().filter(|d| d.role == Role::Resource)
+                .find_map(|d| d.source.leaves().into_iter().find_map(|leaf| match *leaf {
+                    Source::Loaded { load, first } if self.twin_loads(site, load) => Some((d.site, first)),
+                    _ => None,
+                }))
+        });
         let Some((at, first)) = use_at else {
             return Err("a descriptor read only as data");
         };
@@ -7079,6 +7190,24 @@ impl<'a> Lower<'a> {
                 fu
             };
             match op {
+                60 | 61 if self.s.threads.is_some() => {
+                    self.cross_lane(true)?;
+                    if self.wave64 == Wave64Mode::Emulate {
+                        return Err("quad gradients without a native wave layout");
+                    }
+                    let scale = if op == 61 {
+                        let bias = addr_u32(self, usize::from(offset_word))?;
+                        let bias = self.as_float(bias);
+                        Some(self.unary(21, bias))
+                    } else {
+                        None
+                    };
+                    let grad = self.quad_gradients(&cs[..spatial], scale);
+                    args.extend(&os);
+                    args.extend(grad);
+                    args.push(clamp);
+                    self.s.op(c, "sampleGrad.f32", Attr::ReadOnly, self.s.t.res_ret, 63, &args)
+                }
                 60 => {
                     args.extend(&os);
                     args.push(clamp);
