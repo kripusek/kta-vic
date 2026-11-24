@@ -150,7 +150,16 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
         let code = context.Rip as *const u8;
         let prefix = code.cast::<[u8; 3]>().read_unaligned();
         match prefix {
-            [0x0f, 0x01, 0xfc] => ((context.Rax & !63) as *mut u8).write_bytes(0, 64),
+            [0x0f, 0x01, 0xfc] => {
+                const EXCEPTION_NONCONTINUABLE: u32 = 1;
+                if record.ExceptionFlags & EXCEPTION_NONCONTINUABLE != 0 {
+                    return false;
+                }
+                if crate::clzero::try_batch(context) {
+                    return true;
+                }
+                ((context.Rax & !63) as *mut u8).write_bytes(0, 64);
+            }
             [0x0f, 0x01, 0xfa] => {}
             [0x0f, 0x01, 0xfb] => std::thread::yield_now(),
             _ => {
