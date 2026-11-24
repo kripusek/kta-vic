@@ -3043,41 +3043,20 @@ impl<'a> Lower<'a> {
             }
             return Ok(());
         }
-        if let Some(u) = kind
-            && matches!(u.kind, ResourceType::Srv | ResourceType::Uav)
-        {
-            let u_bit = if u.kind == ResourceType::Uav { 0x1000 } else { 0 };
-            let structured = u.stride >= 4 && u.stride.is_multiple_of(4);
-            let h = self.handle(
-                site,
-                src,
-                false,
-                if structured {
-                    (12 | u_bit, u.stride)
-                } else {
-                    (11 | u_bit, 0)
-                },
-            )?;
-            let st = structured.then(|| self.s.m.i32(u.stride));
+        if matches!(kind, Some(u) if u.kind == ResourceType::Srv) {
+            let h = self.handle(site, src, false, (11, 0))?;
             for k in 0..count {
                 let off = self.s.m.i32(4 * k);
                 let a = self.s.m.bin(c, Bin::Add, addr, off);
-                let (idx, elem_off) = match st {
-                    Some(st) => (
-                        self.s.m.bin(c, Bin::UDiv, a, st),
-                        self.s.m.bin(c, Bin::URem, a, st),
-                    ),
-                    None => (a, self.s.m.undef(self.s.t.i32)),
-                };
                 let mask = self.s.m.i8(1);
-                let al = self.s.m.i32(4);
+                let (u, al) = (self.s.m.undef(self.s.t.i32), self.s.m.i32(4));
                 let r = self.s.op(
                     c,
                     "rawBufferLoad.f32",
                     Attr::ReadOnly,
                     self.s.t.res_ret,
                     139,
-                    &[h, idx, elem_off, mask, al],
+                    &[h, a, u, mask, al],
                 );
                 let x = self.s.m.extract(c, r, 0);
                 let x = self.as_int(x);
