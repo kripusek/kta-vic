@@ -98,6 +98,48 @@ static DONE: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 /// Waiting allowed per title frame, over all threads.
 const BUDGET: Duration = Duration::from_millis(500);
 
+/// The frame tag and outstanding/consumed wait time change together.
+struct FrameBudget {
+    state: Mutex<Option<(u64, Duration)>>,
+}
+
+impl FrameBudget {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(None),
+        }
+    }
+
+    fn reserve(&self, frame: u64) -> Duration {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let (active, used) = state.get_or_insert((frame, Duration::ZERO));
+        let advance = frame.wrapping_sub(*active);
+        if advance >= 1 << 63 {
+            // The caller took its frame snapshot before a newer waiter.
+            return Duration::ZERO;
+        }
+        if advance != 0 {
+            *active = frame;
+            *used = Duration::ZERO;
+        }
+        let available = BUDGET.saturating_sub(*used);
+        *used += available;
+        available
+    }
+
+    fn refund(&self, frame: u64, unused: Duration) {
+        if unused.is_zero() {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((active, used)) = &mut *state
+            && *active == frame
+        {
+            *used = used.saturating_sub(unused);
+        }
+    }
+}
+
 /// Pipelines queued and not made yet.
 static WAITING: AtomicU64 = AtomicU64::new(0);
 
@@ -131,13 +173,12 @@ pub(crate) fn early(p: &Arc<Pending>) {
 
 /// Waits for `p` while frame `frame` has budget left.
 fn wait(p: &Pending, frame: u64) {
-    static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
-    static WAITED_US: AtomicU64 = AtomicU64::new(0);
-    if FRAME.swap(frame, Ordering::Relaxed) != frame {
-        WAITED_US.store(0, Ordering::Relaxed);
-    }
-    let left = BUDGET.saturating_sub(Duration::from_micros(WAITED_US.load(Ordering::Relaxed)));
+    static BUDGET_STATE: FrameBudget = FrameBudget::new();
     let started = Instant::now();
+    let left = BUDGET_STATE.reserve(frame);
+    if left.is_zero() {
+        return;
+    }
     let (lock, done) = &DONE;
     let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
     while p.made.get().is_none() {
@@ -145,9 +186,13 @@ fn wait(p: &Pending, frame: u64) {
         if rest.is_zero() {
             break;
         }
-        held = done.wait_timeout(held, rest).unwrap_or_else(|e| e.into_inner()).0;
+        held = done
+            .wait_timeout(held, rest)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
     }
-    WAITED_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    drop(held);
+    BUDGET_STATE.refund(frame, left.saturating_sub(started.elapsed()));
 }
 
 static WORKER_LIMIT: OnceLock<std::num::NonZeroU8> = OnceLock::new();
@@ -224,7 +269,10 @@ fn start(p: &Arc<Pending>, priority: u8) {
     let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(new) = queue.push(p, priority) {
         if new {
-            PEAK.fetch_max(WAITING.fetch_add(1, Ordering::Relaxed) + 1, Ordering::Relaxed);
+            PEAK.fetch_max(
+                WAITING.fetch_add(1, Ordering::Relaxed) + 1,
+                Ordering::Relaxed,
+            );
         }
         AVAILABLE.notify_one();
     }
@@ -328,6 +376,42 @@ mod tests {
             assert_eq!(queue.push(&claimed, REQUESTED), None);
         }
         assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn frame_budget_rejects_delayed_reservations_and_refunds() {
+        let budget = FrameBudget::new();
+        assert_eq!(budget.reserve(u64::MAX), BUDGET);
+        assert_eq!(budget.reserve(0), BUDGET);
+        assert_eq!(budget.reserve(u64::MAX), Duration::ZERO);
+        budget.refund(u64::MAX, BUDGET);
+        assert_eq!(budget.reserve(0), Duration::ZERO);
+        let unused = Duration::from_millis(3);
+        budget.refund(0, unused);
+        assert_eq!(budget.reserve(0), unused);
+    }
+
+    #[test]
+    fn concurrent_waiters_share_one_frame_budget() {
+        let budget = FrameBudget::new();
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|threads| {
+            let waiters: Vec<_> = (0..8)
+                .map(|_| {
+                    threads.spawn(|| {
+                        start.wait();
+                        budget.reserve(101)
+                    })
+                })
+                .collect();
+            assert_eq!(
+                waiters
+                    .into_iter()
+                    .map(|w| w.join().unwrap())
+                    .sum::<Duration>(),
+                BUDGET
+            );
+        });
     }
 
     /// A first use queues the pipeline and, within the budget, gets the
