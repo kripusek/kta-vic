@@ -36,6 +36,8 @@ Causeway preserves the initial pipeline supplied when creating a command list an
 
 Two previously rejected Wave32 pixel shaders passed the Windows SDK validator after forwarding proven register spills across a mask join. A combined experimental build created both original mesh/pixel pipelines during a bounded RTX 3060 Ti story run. The run reached the first story card and stalled before any visible world geometry.
 
+Watched textures now reuse initialized scratch on each submission thread. GPU writeback snapshots reuse pages across submissions. In a CPU benchmark with 28 expanding declarations on a 174 MB buffer, warm snapshot capture fell from 343.42 to 11.80 ms. Declaring the widest range first increased the median from 13.31 to 17.54 ms. The effect on story frame time needs an in-game measurement. [Watched texture scratch](https://github.com/Marvisak/VIctory/pull/495) and [paged snapshots](https://github.com/Marvisak/VIctory/pull/497)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.
