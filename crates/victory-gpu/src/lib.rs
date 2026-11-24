@@ -53,7 +53,7 @@ mod texture;
 mod watch;
 
 #[cfg(windows)]
-pub use host::on_failure;
+pub use host::{on_failure, set_output_height};
 #[cfg(windows)]
 pub use watch::{title_memory_remapped, writing as kernel_will_write};
 
