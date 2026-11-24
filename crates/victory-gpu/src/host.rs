@@ -427,6 +427,8 @@ struct Deferred {
     /// Bound heaps own the resources in mirrored descriptors, including
     /// slots chosen by shaders and invisible to CPU recording.
     heaps: Vec<std::sync::Arc<crate::descriptor::host::HostHeap>>,
+    /// Textures named by aliasing and UAV barriers without a state transition.
+    barrier_textures: std::collections::HashMap<usize, std::sync::Arc<crate::resource::HostTexture>>,
     /// Buffer ranges refreshed since the last title copy (host copy,
     /// address, bytes): refreshing them again would find the same bytes.
     refreshed: std::collections::HashSet<(usize, usize, usize)>,
@@ -1221,6 +1223,14 @@ impl HostList {
         self.deferred().heaps.extend(heaps.into_iter().flatten().cloned());
         // SAFETY: an open list and live shader-visible heaps.
         unsafe { self.list.SetDescriptorHeaps(&native) };
+    }
+
+    /// Retains the host texture named by an aliasing or UAV barrier.
+    pub(crate) fn keep_barrier_texture(&self, texture: std::sync::Arc<crate::resource::HostTexture>) {
+        self.deferred()
+            .barrier_textures
+            .entry(std::sync::Arc::as_ptr(&texture) as usize)
+            .or_insert(texture);
     }
 
     /// Whether this is the first time since the reset that the list asks

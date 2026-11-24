@@ -2185,6 +2185,50 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn recorded_uav_barrier_retains_the_released_texture() {
+        use windows::Win32::Graphics::Direct3D12::{ID3D12CommandAllocator, ID3D12GraphicsCommandList};
+        use windows::core::Interface;
+
+        let Some(gpu) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let null = std::ptr::null();
+        let (mut image, mut allocator, mut list) = (null, null, null);
+        let rgba = ResourceDesc { flags: 4, ..texture(4, 4, 28, 1) };
+        assert_eq!(
+            create_committed(null, &PROPERTIES, 0, &rgba, 8, null.cast(), &RESOURCE_IIDS[0], &mut image),
+            S_OK,
+        );
+        let owner = std::sync::Arc::downgrade(&host_copy(image).unwrap());
+        let allocator_iid = ID3D12CommandAllocator::IID;
+        assert_eq!(
+            crate::list::create_allocator(null, 0, (&raw const allocator_iid).cast(), &mut allocator),
+            S_OK,
+        );
+        let list_iid = ID3D12GraphicsCommandList::IID;
+        assert_eq!(
+            crate::list::create_list(null, 0, 0, allocator, null, (&raw const list_iid).cast(), &mut list),
+            S_OK,
+        );
+        // Legacy barrier layout: UAV kind 2, flags 0, and the title resource.
+        let barrier = [2u64, image as u64, 0, 0];
+        let record = slot::<extern "system" fn(This, u32, *const u64) -> u32>(list, 0xd0);
+        assert_eq!(record(list, 1, barrier.as_ptr()), 0);
+        assert_eq!(slot::<extern "system" fn(This) -> HRESULT>(list, 0x48)(list), S_OK);
+        let release = |o: This| slot::<extern "system" fn(This) -> u32>(o, 0x10)(o);
+        assert_eq!(release(image), 0);
+        assert_eq!(owner.strong_count(), 1);
+        let host_list = crate::list::host_list(list).unwrap();
+        assert_eq!(gpu.execute_checked(&[host_list]), None);
+        assert_eq!(slot::<extern "system" fn(This, This, This) -> HRESULT>(list, 0x50)(list, allocator, null), S_OK);
+        assert_eq!(owner.strong_count(), 0);
+        assert_eq!(release(list), 0);
+        assert_eq!(release(allocator), 0);
+    }
+
     /// A 4x4 texture filled from a title buffer through our list and queue,
     /// then read back from the host GPU.
     #[cfg(windows)]
