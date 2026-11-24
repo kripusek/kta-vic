@@ -383,6 +383,11 @@ pub(crate) fn poll_target_request(present: u64) {
         && let Some(frame) = TARGET_REQUEST.poll(marker, present, Instant::now())
     {
         tracing::info!(frame, "target and presentation capture armed");
+        static MESH_GROUPS: LazyLock<bool> =
+            LazyLock::new(|| std::env::var("VICTORY_CAPTURE_INDIRECT_MESH").as_deref() == Ok("1"));
+        if *MESH_GROUPS {
+            crate::indirect::capture::arm(frame);
+        }
         static TRACE_OPS: LazyLock<bool> =
             LazyLock::new(|| std::env::var("VICTORY_CAPTURE_DRAW_DROPS").as_deref() == Ok("1"));
         if *TRACE_OPS {
@@ -483,6 +488,7 @@ pub(crate) fn note_target(resource: crate::object::This) {
 
 /// At the present of frame `frame`: saves the noted targets.
 pub(crate) fn dump_targets(frame: u64) {
+    crate::indirect::capture::disarm(frame);
     let targets = TARGETS
         .lock()
         .unwrap_or_else(|e| e.into_inner())

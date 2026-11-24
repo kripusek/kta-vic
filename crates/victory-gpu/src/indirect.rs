@@ -23,6 +23,10 @@ use windows::core::s;
 
 use crate::host::{HostList, host, transition};
 
+#[cfg(feature = "diagnostics")]
+#[path = "indirect_capture.rs"]
+pub(crate) mod capture;
+
 const SOURCE: &str = r#"
 #define RS "RootConstants(num32BitConstants=4, b0), UAV(u0), UAV(u1)"
 cbuffer Record : register(b0) { uint kind; uint stride; uint records; uint unused; };
@@ -94,13 +98,17 @@ fn clamp() -> Option<&'static Clamp> {
 
 fn make() -> windows::core::Result<Clamp> {
     let device = &host().ok_or_else(windows::core::Error::empty)?.device;
+    make_for(device, SOURCE)
+}
+
+fn make_for(device: &ID3D12Device, source: &str) -> windows::core::Result<Clamp> {
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
     // SAFETY: the source and names live through the call; out pointers ours.
     let compiled = unsafe {
         D3DCompile(
-            SOURCE.as_ptr().cast(),
-            SOURCE.len(),
+            source.as_ptr().cast(),
+            source.len(),
             s!("clamp"),
             None,
             None,

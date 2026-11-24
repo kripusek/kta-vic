@@ -452,6 +452,8 @@ struct Deferred {
     writes: Vec<(usize, crate::queue::Written, usize)>,
     /// Whether a step zeroes the indirect-work budget.
     budget_zeroed: bool,
+    #[cfg(feature = "diagnostics")]
+    mesh_samples: Vec<crate::indirect::capture::Sample>,
 }
 
 impl Host {
@@ -689,7 +691,12 @@ impl Host {
         }
         COPY_BACK[0].fetch_add(copying.elapsed().as_micros() as u64, Ordering::Relaxed);
         for list in runs {
-            for &(at, what, bytes) in &list.deferred().writes {
+            let deferred = list.deferred();
+            #[cfg(feature = "diagnostics")]
+            for sample in &deferred.mesh_samples {
+                sample.report();
+            }
+            for &(at, what, bytes) in &deferred.writes {
                 what.write(at as *mut u8, bytes);
             }
         }
@@ -1259,6 +1266,11 @@ impl HostList {
         }
         // SAFETY: a live buffer.
         Some(unsafe { buffer.GetGPUVirtualAddress() })
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn keep_mesh_sample(&self, sample: crate::indirect::capture::Sample) {
+        self.deferred().mesh_samples.push(sample);
     }
 
     /// Keeps `object` alive until the list is reset.
