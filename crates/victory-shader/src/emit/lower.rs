@@ -5825,8 +5825,14 @@ impl<'a> Lower<'a> {
             // gradients (x then y) come before the coordinates, each group
             // starting at a fresh VGPR when a16 is set.
             let spatial = coords - usize::from(kind == 6 || kind == 7);
+            // A cube's gradients are those of its two face coordinates.
+            let grad_dims = if kind == 5 { 2 } else { spatial };
             let deriv_regs = if op == 63 {
-                if *a16 { spatial.div_ceil(2) } else { spatial }
+                if *a16 {
+                    grad_dims.div_ceil(2)
+                } else {
+                    grad_dims
+                }
             } else {
                 0
             };
@@ -5841,15 +5847,16 @@ impl<'a> Lower<'a> {
                     l.as_float(x)
                 }
             };
-            if kind == 5 && (*unorm || op == 63 || op == 81) {
-                return Err("a cube sample with texel coordinates, gradients or a level query");
+            if kind == 5 && (*unorm || op == 81) {
+                return Err("a cube sample with texel coordinates or a level query");
             }
             for (k, slot) in cs.iter_mut().enumerate().take(coords) {
                 let x = addr_packed(self, coord_base, k)?;
                 *slot = to_float(self, x);
             }
+            let face = cs[2];
             if kind == 5 {
-                let dir = self.cube_direction(cs[0], cs[1], cs[2]);
+                let dir = self.cube_direction(cs[0], cs[1], face);
                 cs[..3].copy_from_slice(&dir);
             }
             if *unorm {
@@ -5928,11 +5935,18 @@ impl<'a> Lower<'a> {
                 }
                 63 => {
                     let mut g = vec![fu; 6];
-                    for k in 0..spatial {
+                    for k in 0..grad_dims {
                         let x = addr_packed(self, first, k)?;
                         g[k] = to_float(self, x);
                         let y = addr_packed(self, first + deriv_regs, k)?;
                         g[3 + k] = to_float(self, y);
+                    }
+                    if kind == 5 {
+                        // The host takes the gradients of the direction.
+                        let x = self.cube_gradient(g[0], g[1], face);
+                        let y = self.cube_gradient(g[3], g[4], face);
+                        g[..3].copy_from_slice(&x);
+                        g[3..].copy_from_slice(&y);
                     }
                     args.extend(&os);
                     args.extend(g);
@@ -6096,16 +6110,49 @@ impl<'a> Lower<'a> {
         let (one, mone) = (k(self, 1.0), k(self, -1.0));
         let f = self.s.m.cast(c, Cast::FpToUi, face, self.s.t.i32);
         // Per face +x, -x, +y, -y, +z, -z.
-        let table = [
-            [one, mone, u, u, u, nu],
-            [nv, nv, one, mone, nv, nv],
-            [nu, u, v, nv, one, mone],
-        ];
+        self.cube_face(
+            f,
+            [
+                [one, mone, u, u, u, nu],
+                [nv, nv, one, mone, nv, nv],
+                [nu, u, v, nv, one, mone],
+            ],
+        )
+    }
+
+    /// The gradient of [`Self::cube_direction`] for the gradients `ds`, `dt`
+    /// of the face coordinates: the direction is linear in them (twice
+    /// each, signed per face) and constant along the face's own axis.
+    fn cube_gradient(&mut self, ds: V, dt: V, face: V) -> [V; 3] {
+        let c = self.cur;
+        let two = self.s.m.f32(2.0f32.to_bits());
+        let u = self.s.m.bin(c, Bin::Mul, ds, two);
+        let v = self.s.m.bin(c, Bin::Mul, dt, two);
+        let z = self.s.m.f32(0x8000_0000);
+        let (nu, nv) = (
+            self.s.m.bin(c, Bin::Sub, z, u),
+            self.s.m.bin(c, Bin::Sub, z, v),
+        );
+        let o = self.s.m.f32(0);
+        let f = self.s.m.cast(c, Cast::FpToUi, face, self.s.t.i32);
+        self.cube_face(
+            f,
+            [
+                [o, o, u, u, u, nu],
+                [nv, nv, o, o, nv, nv],
+                [nu, u, v, nv, o, o],
+            ],
+        )
+    }
+
+    /// Each row's entry for the face (an integer, +x -x +y -y +z -z).
+    fn cube_face(&mut self, face: V, table: [[V; 6]; 3]) -> [V; 3] {
+        let c = self.cur;
         table.map(|row| {
             let mut r = row[0];
             for (n, &x) in row.iter().enumerate().skip(1) {
                 let kn = self.s.m.i32(n as u32);
-                let is = self.s.m.cmp(c, pred::EQ, f, kn);
+                let is = self.s.m.cmp(c, pred::EQ, face, kn);
                 r = self.s.m.select(c, is, x, r);
             }
             r
