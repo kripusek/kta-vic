@@ -39,7 +39,7 @@ fn clamp_dispatch(records: u32) -> (u32, u32) {
 }
 
 const SOURCE: &str = r#"
-#define RS "RootConstants(num32BitConstants=7, b0), SRV(t0), SRV(t1), UAV(u0), UAV(u1)"
+#define RS "RootConstants(num32BitConstants=8, b0), SRV(t0), SRV(t1), UAV(u0), UAV(u1)"
 cbuffer Record : register(b0) {
     uint kind;
     uint stride;
@@ -48,6 +48,7 @@ cbuffer Record : register(b0) {
     uint has_count;
     uint count_offset;
     uint row_threads;
+    uint rectangle_vertices;
 };
 ByteAddressBuffer src_args : register(t0);
 ByteAddressBuffer count_buf : register(t1);
@@ -71,10 +72,22 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint dst_at = index * stride;
     uint cost;
     uint2 draw_counts = uint2(0, 0);
+    uint first_vertex = 0;
     uint3 groups = uint3(0, 0, 0);
     if (kind <= 1) {
         // Draws: vertex or index count, then instances.
         uint count = min(src_args.Load(src_at), 1u << 24);
+        if (rectangle_vertices != 0) {
+            uint first = src_args.Load(src_at + 8);
+            uint vertices = (count / 3) * 3;
+            if (first % 3 != 0 || first >= rectangle_vertices ||
+                vertices > rectangle_vertices - first) {
+                count = 0;
+            } else {
+                count = vertices * 2;
+                first_vertex = first * 2;
+            }
+        }
         uint instances = min(src_args.Load(src_at + 4), (1u << 26) / max(count, 1u));
         cost = count * instances;
         draw_counts = uint2(count, instances);
@@ -113,7 +126,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         }
         dst_args.Store2(dst_at, draw_counts);
         for (uint off = 8; off < stride; off += 4) {
-            dst_args.Store(dst_at + off, src_args.Load(src_at + off));
+            uint word = rectangle_vertices != 0 && off == 8 ? first_vertex : src_args.Load(src_at + off);
+            dst_args.Store(dst_at + off, word);
         }
     } else {
         if (over) {
@@ -243,10 +257,20 @@ pub(crate) fn bound(
     src: (&ID3D12Resource, u64),
     count: Option<(&ID3D12Resource, u64)>,
     spec: (u32, u32, u32),
+    rectangle_vertices: u32,
 ) -> Option<ID3D12Resource> {
     let bytes = validate_layout(spec, src.1, count.map(|(_, off)| off))?;
     let (c, budget, dst) = (clamp()?, list.budget()?, list.indirect_scratch(bytes)?);
-    record_clamp(c, &list.list, &dst, budget, src, count, spec).then_some(dst)
+    record_clamp(
+        c,
+        &list.list,
+        &dst,
+        budget,
+        src,
+        count,
+        (spec, rectangle_vertices),
+    )
+    .then_some(dst)
 }
 
 fn record_clamp(
@@ -256,7 +280,7 @@ fn record_clamp(
     budget: u64,
     (src, src_offset): (&ID3D12Resource, u64),
     count: Option<(&ID3D12Resource, u64)>,
-    (kind, stride, records): (u32, u32, u32),
+    ((kind, stride, records), rectangle_vertices): ((u32, u32, u32), u32),
 ) -> bool {
     let Some(bytes) = validate_layout(
         (kind, stride, records),
@@ -310,6 +334,7 @@ fn record_clamp(
         has_count,
         count_offset,
         groups_x * CLAMP_THREADS,
+        rectangle_vertices,
     ];
     // SAFETY: an open list; our root signature and pipeline; live source,
     // count, scratch destination, and budget buffers. `src` and `count` stay
@@ -744,7 +769,7 @@ void main() {
             budget_gpu,
             (&src_buf, ARGS_OFFSET as u64),
             Some((&count_buf, COUNT_OFFSET_1 as u64)),
-            (KIND_DISPATCH, STRIDE, MAX),
+            ((KIND_DISPATCH, STRIDE, MAX), 0),
         ));
         // SAFETY: open command list, valid worker PSO/root and buffers.
         unsafe {
@@ -789,7 +814,7 @@ void main() {
             budget_gpu,
             (&src_buf, ARGS_OFFSET as u64),
             Some((&count_buf, COUNT_OFFSET_2 as u64)),
-            (KIND_DISPATCH, STRIDE, MAX),
+            ((KIND_DISPATCH, STRIDE, MAX), 0),
         ));
         // SAFETY: open command list, valid worker PSO/root and buffers.
         unsafe {
@@ -861,6 +886,77 @@ void main() {
         assert_ne!(clamped_words[21], 0xDEAD_BEEF);
     }
 
+    #[test]
+    fn warp_rectangle_records_become_bounded_triangle_records() {
+        let Some(mut warp) = WarpHarness::new() else {
+            assert!(
+                std::env::var_os("VICTORY_WARP").is_none(),
+                "WARP test setup failed"
+            );
+            return;
+        };
+        const STRIDE: u32 = 20;
+        const RECORDS: u32 = 6;
+        let source = [
+            [6, 2, 0, 1, 11],
+            [7, 1, 3, 7, 22],
+            [3, 1, 1, 8, 33],
+            [3, 1, 9, 9, 44],
+            [6, 1, 6, 10, 55],
+            [3, u32::MAX, 0, 0, 66], // Inactive, must not charge the budget.
+        ];
+        let bytes = u64::from(STRIDE * RECORDS);
+        let (src, src_ptr, _) = warp.shared_buffer(bytes + 4);
+        let (_budget, budget_ptr, budget_gpu) = warp.shared_buffer(256);
+        let (readback, readback_ptr, _) = warp.shared_buffer(bytes);
+        let dst = warp.default_uav(bytes);
+        // SAFETY: the mapped buffers have sufficient capacity, including the count at the end.
+        unsafe {
+            src_ptr.cast::<[[u32; 5]; RECORDS as usize]>().write(source);
+            src_ptr.add(bytes as usize).cast::<u32>().write(5);
+            budget_ptr.cast::<u32>().write(0);
+        }
+        assert!(record_clamp(
+            &warp.clamp,
+            &warp.list,
+            &dst,
+            budget_gpu,
+            (&src, 0),
+            Some((&src, bytes)),
+            ((0, STRIDE, RECORDS), 9),
+        ));
+        // SAFETY: the clamp leaves the scratch buffer in INDIRECT_ARGUMENT.
+        unsafe {
+            warp.list.ResourceBarrier(&[transition(
+                &dst,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+            warp.list.CopyBufferRegion(&readback, 0, &dst, 0, bytes);
+        }
+        warp.submit_and_wait();
+
+        // SAFETY: the GPU completed the copy and the buffers remain mapped.
+        unsafe {
+            assert_eq!(
+                readback_ptr.cast::<[[u32; 5]; 5]>().read(),
+                [
+                    [12, 2, 0, 1, 11],
+                    [12, 1, 6, 7, 22],
+                    [0, 1, 0, 8, 33],
+                    [0, 1, 0, 9, 44],
+                    [0, 1, 0, 10, 55],
+                ]
+            );
+            assert_eq!(budget_ptr.cast::<u32>().read(), 36);
+            assert_eq!(
+                src_ptr.cast::<[[u32; 5]; RECORDS as usize]>().read(),
+                source
+            );
+            assert_eq!(src_ptr.add(bytes as usize).cast::<u32>().read(), 5);
+        }
+    }
+
     /// WARP D3D12 test proving `BUDGET` saturates without 32-bit unsigned
     /// wraparound across >64 huge indexed-draw records (`count = None`), while
     /// preserving `StartIndexLocation`, `BaseVertexLocation`,
@@ -916,7 +1012,7 @@ void main() {
             budget_gpu,
             (&src_buf, 0),
             None,
-            (KIND_INDEXED, STRIDE, RECORDS),
+            ((KIND_INDEXED, STRIDE, RECORDS), 0),
         ));
         done_on(&warp.list, &dst_buf);
 
@@ -1003,9 +1099,16 @@ void main() {
 
         // First two calls fit inside the initial 64 KiB scratch buffer and
         // must reuse the exact same `ID3D12Resource`.
-        let b1 = bound(&list, (&src_buf, 0), Some((&count_buf, 0)), (0, 16, 64)).unwrap();
+        let b1 = bound(&list, (&src_buf, 0), Some((&count_buf, 0)), (0, 16, 64), 0).unwrap();
         done(&list, &b1);
-        let b2 = bound(&list, (&src_buf, 64), Some((&count_buf, 0)), (1, 20, 128)).unwrap();
+        let b2 = bound(
+            &list,
+            (&src_buf, 64),
+            Some((&count_buf, 0)),
+            (1, 20, 128),
+            0,
+        )
+        .unwrap();
         done(&list, &b2);
         assert_eq!(
             b1.as_raw(),
@@ -1015,7 +1118,14 @@ void main() {
 
         // A call needing >64 KiB grows the scratch buffer mid-list while keeping
         // `b1` alive until reset.
-        let b3 = bound(&list, (&src_buf, 0), Some((&count_buf, 0)), (1, 20, 5000)).unwrap();
+        let b3 = bound(
+            &list,
+            (&src_buf, 0),
+            Some((&count_buf, 0)),
+            (1, 20, 5000),
+            0,
+        )
+        .unwrap();
         done(&list, &b3);
         assert_ne!(
             b3.as_raw(),
@@ -1029,7 +1139,14 @@ void main() {
 
         // After reset, requests up to the grown high-water mark reuse `b3` with
         // zero new allocations.
-        let b4 = bound(&list, (&src_buf, 0), Some((&count_buf, 0)), (1, 20, 4096)).unwrap();
+        let b4 = bound(
+            &list,
+            (&src_buf, 0),
+            Some((&count_buf, 0)),
+            (1, 20, 4096),
+            0,
+        )
+        .unwrap();
         done(&list, &b4);
         assert_eq!(
             b4.as_raw(),

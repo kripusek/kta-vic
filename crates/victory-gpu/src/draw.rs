@@ -839,6 +839,23 @@ impl State {
         }
     }
 
+    /// Whole rectangles available in the bound per-vertex buffers.
+    fn rectangle_vertices(&self, p: &HostPipeline) -> Option<u32> {
+        const EXPANDED_BYTES: u32 = 4 << 20;
+        // Doubling the vertex count must stay within the indirect draw cap.
+        let mut vertices = 1 << 23;
+        for e in p.inputs.iter().filter(|e| !e.per_instance) {
+            let v = self.vertex[e.slot as usize];
+            if v.address == 0 || v.stride == 0 {
+                return None;
+            }
+            vertices = vertices
+                .min(v.size / v.stride)
+                .min(EXPANDED_BYTES / 2 / v.stride);
+        }
+        (vertices >= 3).then_some(vertices / 3 * 3)
+    }
+
     /// Binds vertex buffers holding the rectangles of vertices `first..first
     /// + count` as triangles, made when the list is submitted.
     fn rectangles(&self, list: &HostList, count: u32, first: u32) -> bool {
@@ -954,8 +971,10 @@ impl State {
             crate::pipeline::note_drop(self.pipeline as This);
             return false;
         };
+        let indirect_rectangles = kind == DRAW && self.topology == RECTANGLES;
         let matches_kind = match kind {
-            DRAW | INDEXED => self.topology != RECTANGLES && !p.compute && !p.mesh,
+            DRAW => !p.compute && !p.mesh,
+            INDEXED => self.topology != RECTANGLES && !p.compute && !p.mesh,
             MESH => !p.compute && p.mesh,
             DISPATCH => p.compute,
             _ => false,
@@ -989,6 +1008,23 @@ impl State {
             why("no host signature");
             return false;
         };
+        let rectangle_vertices = if indirect_rectangles {
+            let Some(vertices) = self.rectangle_vertices(p) else {
+                why("rectangle vertices outside their buffers");
+                return false;
+            };
+            vertices
+        } else {
+            0
+        };
+        // As for direct rectangles, the expansion sees CPU vertex data and the
+        // shader receives triangle-list vertex IDs.
+        if rectangle_vertices != 0
+            && (!self.prepare(list, false) || !self.rectangles(list, rectangle_vertices, 0))
+        {
+            why("rectangle preparation failed");
+            return false;
+        }
         args.refresh(list, arguments, len);
         if let Some((s, at)) = &counter {
             s.refresh(list, *at, 4);
@@ -1001,13 +1037,23 @@ impl State {
             (&args.buffer, args.offset(arguments)),
             count_arg,
             (kind, stride, max),
+            rectangle_vertices,
         ) else {
             why("not bounded (no clamp, or arguments not 4-byte aligned)");
             return false;
         };
-        self.host_pipeline = 0;
         self.host_roots[1] = 0;
+        if rectangle_vertices == 0 {
+            self.host_pipeline = 0;
+        }
         let ran = match kind {
+            DRAW if rectangle_vertices != 0 => {
+                // Preparation succeeded before the clamp charged the budget.
+                // Restore the graphics PSO replaced by the clamp's compute pass.
+                // SAFETY: an open list and the live pipeline retained by prepare.
+                unsafe { list.list.SetPipelineState(&p.pso) };
+                true
+            }
             DRAW | INDEXED => self.prepare(list, kind == INDEXED),
             MESH => self.prepare_for(list, false, true),
             DISPATCH => self.bind(list, p, true),
@@ -1020,7 +1066,12 @@ impl State {
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| {
-            self.op_text(format!("indirect kind {kind} max {max} at {arguments:#x}"), kind == DISPATCH)
+            let operation = if indirect_rectangles {
+                format!("indirect rectangles max {max} at {arguments:#x}")
+            } else {
+                format!("indirect kind {kind} max {max} at {arguments:#x}")
+            };
+            self.op_text(operation, kind == DISPATCH)
         });
         // SAFETY: an open list with everything set; the scratch buffer and
         // host copies are kept alive by the list, and the signature is cached.
