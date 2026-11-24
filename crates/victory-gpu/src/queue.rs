@@ -294,6 +294,9 @@ extern "system" fn present(
             // SAFETY: the plane lists `count` resources.
             let resource = unsafe { *plane.resources };
             if let Some(texture) = crate::resource::host_resource(resource) {
+                if resources.iter().any(|&(_, previous, _)| previous == texture) {
+                    continue;
+                }
                 let state = crate::resource::host_transition(resource, COPY_SOURCE)
                     .map_or(COPY_SOURCE, |(_, before)| before);
                 resources.push((resource, texture, state));

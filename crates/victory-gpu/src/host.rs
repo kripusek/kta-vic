@@ -8,17 +8,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-use windows::Win32::Graphics::Direct3D::{
-    D3D_FEATURE_LEVEL_12_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob,
-};
+use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Interface, PCSTR, PCWSTR, s, w};
+use windows::core::{Interface, PCWSTR, w};
+
+mod compositor;
+use compositor::Compositor;
 
 /// Resource states without the console's own bits (compression hints from
 /// bit 25 up), which the host rejects.
@@ -183,6 +183,11 @@ pub(crate) fn host() -> Option<&'static Host> {
 }
 
 fn create() -> windows::core::Result<Host> {
+    let warp = cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_WARP").is_some();
+    create_device(warp)
+}
+
+fn create_device(warp: bool) -> windows::core::Result<Host> {
     // SAFETY: plain D3D12 object creation with valid descriptions.
     unsafe {
         // The debug layer only in builds with diagnostics.
@@ -227,7 +232,7 @@ fn create() -> windows::core::Result<Host> {
         // Diagnostics: the software adapter, on which a shader's wild access
         // is an access violation in this process (a crash report with the
         // address and instruction) instead of a GPU fault and driver reset.
-        if cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_WARP").is_some() {
+        if warp {
             let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
             let adapter: IDXGIAdapter = factory.EnumWarpAdapter()?;
             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
@@ -1673,161 +1678,6 @@ fn swap_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
 }
 
 const BUFFERS: u32 = 2;
-const MAX_PLANES: u32 = 8;
-
-/// Built-in fullscreen-triangle compositor for multi-plane `PresentX` calls
-/// (e.g. Series S presenting a 1080p scene plane with a 4K UI overlay plane).
-struct Compositor {
-    format: DXGI_FORMAT,
-    root: ID3D12RootSignature,
-    opaque: ID3D12PipelineState,
-    overlay: ID3D12PipelineState,
-    rtv_heap: ID3D12DescriptorHeap,
-    srv_heap: ID3D12DescriptorHeap,
-    srv_stride: u32,
-}
-
-impl Compositor {
-    fn new(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Self> {
-        const SOURCE: &str = r#"
-            #define RS "DescriptorTable(SRV(t0), visibility=SHADER_VISIBILITY_PIXEL), \
-                        StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, \
-                            addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, \
-                            visibility=SHADER_VISIBILITY_PIXEL)"
-            Texture2D tex : register(t0);
-            SamplerState smp : register(s0);
-            [RootSignature(RS)]
-            void vs(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD) {
-                uv = float2((id << 1) & 2, id & 2);
-                pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-            }
-            [RootSignature(RS)]
-            float4 ps(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
-                return tex.Sample(smp, uv);
-            }
-        "#;
-        let compile = |entry: PCSTR, target: PCSTR| -> windows::core::Result<ID3DBlob> {
-            let mut code: Option<ID3DBlob> = None;
-            let mut errors: Option<ID3DBlob> = None;
-            // SAFETY: static source and entry/target strings; out pointers ours.
-            let res = unsafe {
-                D3DCompile(
-                    SOURCE.as_ptr().cast(),
-                    SOURCE.len(),
-                    s!("present_composite"),
-                    None,
-                    None,
-                    entry,
-                    target,
-                    0,
-                    0,
-                    &mut code,
-                    Some(&mut errors),
-                )
-            };
-            if let Err(e) = res {
-                if let Some(errors) = errors {
-                    // SAFETY: the blob's own bytes.
-                    let text = unsafe {
-                        std::slice::from_raw_parts(
-                            errors.GetBufferPointer().cast::<u8>(),
-                            errors.GetBufferSize(),
-                        )
-                    };
-                    tracing::warn!("present compositor: {}", String::from_utf8_lossy(text));
-                }
-                return Err(e);
-            }
-            code.ok_or_else(windows::core::Error::empty)
-        };
-        let vs = compile(s!("vs"), s!("vs_5_1"))?;
-        let ps = compile(s!("ps"), s!("ps_5_1"))?;
-        // SAFETY: compiled shader blobs live through PSO creation.
-        unsafe {
-            let vs_bytes =
-                std::slice::from_raw_parts(vs.GetBufferPointer().cast::<u8>(), vs.GetBufferSize());
-            let ps_bytes =
-                std::slice::from_raw_parts(ps.GetBufferPointer().cast::<u8>(), ps.GetBufferSize());
-            let root: ID3D12RootSignature = device.CreateRootSignature(0, vs_bytes)?;
-            let make_pso = |blend: bool| -> windows::core::Result<ID3D12PipelineState> {
-                let mut rt_blend = D3D12_RENDER_TARGET_BLEND_DESC {
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                if blend {
-                    rt_blend.BlendEnable = true.into();
-                    rt_blend.SrcBlend = D3D12_BLEND_ONE;
-                    rt_blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-                    rt_blend.BlendOp = D3D12_BLEND_OP_ADD;
-                    rt_blend.SrcBlendAlpha = D3D12_BLEND_ONE;
-                    rt_blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-                    rt_blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
-                }
-                let mut blend_desc = D3D12_BLEND_DESC::default();
-                blend_desc.RenderTarget[0] = rt_blend;
-                let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
-                rtv_formats[0] = format;
-                let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-                    pRootSignature: std::mem::ManuallyDrop::new(Some(root.clone())),
-                    VS: D3D12_SHADER_BYTECODE {
-                        pShaderBytecode: vs_bytes.as_ptr().cast(),
-                        BytecodeLength: vs_bytes.len(),
-                    },
-                    PS: D3D12_SHADER_BYTECODE {
-                        pShaderBytecode: ps_bytes.as_ptr().cast(),
-                        BytecodeLength: ps_bytes.len(),
-                    },
-                    BlendState: blend_desc,
-                    SampleMask: u32::MAX,
-                    RasterizerState: D3D12_RASTERIZER_DESC {
-                        FillMode: D3D12_FILL_MODE_SOLID,
-                        CullMode: D3D12_CULL_MODE_NONE,
-                        DepthClipEnable: false.into(),
-                        ..Default::default()
-                    },
-                    PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-                    NumRenderTargets: 1,
-                    RTVFormats: rtv_formats,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    ..Default::default()
-                };
-                let pso = device.CreateGraphicsPipelineState(&desc);
-                let _ = std::mem::ManuallyDrop::into_inner(desc.pRootSignature);
-                pso
-            };
-            let opaque = make_pso(false)?;
-            let overlay = make_pso(true)?;
-            let rtv_heap: ID3D12DescriptorHeap =
-                device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                    Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-                    NumDescriptors: 1,
-                    Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-                    NodeMask: 0,
-                })?;
-            let srv_heap: ID3D12DescriptorHeap =
-                device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
-                    Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                    NumDescriptors: MAX_PLANES,
-                    Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-                    NodeMask: 0,
-                })?;
-            let srv_stride =
-                device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            Ok(Compositor {
-                format,
-                root,
-                opaque,
-                overlay,
-                rtv_heap,
-                srv_heap,
-                srv_stride,
-            })
-        }
-    }
-}
 
 struct Presenter {
     swap_chain: IDXGISwapChain3,
@@ -2007,6 +1857,24 @@ impl Host {
                 }
             }
         }
+        let composition = if planes.len() > 1 {
+            let Some(planes) = compositor::prepare_planes(&self.device, planes) else {
+                tracing::warn!("cannot sample these present planes");
+                return None;
+            };
+            if p.compositor.as_ref().is_none_or(|c| c.format != format) {
+                match Compositor::new(&self.device, format) {
+                    Ok(c) => p.compositor = Some(c),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "no present compositor");
+                        return None;
+                    }
+                }
+            }
+            Some((p.compositor.as_ref()?, planes))
+        } else {
+            None
+        };
         // SAFETY: our swap chain, list and live source textures.
         unsafe {
             let index = p.swap_chain.GetCurrentBackBufferIndex();
@@ -2052,101 +1920,8 @@ impl Host {
                 list.ResourceBarrier(&after);
                 (capture, probe)
             } else {
-                if p.compositor.as_ref().is_none_or(|c| c.format != format) {
-                    match Compositor::new(&self.device, format) {
-                        Ok(c) => p.compositor = Some(c),
-                        Err(e) => {
-                            tracing::warn!(error = %e, "no present compositor");
-                            return None;
-                        }
-                    }
-                }
-                let comp = p.compositor.as_ref()?;
-                let rtv = comp.rtv_heap.GetCPUDescriptorHandleForHeapStart();
-                self.device.CreateRenderTargetView(
-                    &back,
-                    Some(&D3D12_RENDER_TARGET_VIEW_DESC {
-                        Format: format,
-                        ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-                        Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
-                            Texture2D: D3D12_TEX2D_RTV {
-                                MipSlice: 0,
-                                PlaneSlice: 0,
-                            },
-                        },
-                    }),
-                    rtv,
-                );
-                let srv_cpu_base = comp.srv_heap.GetCPUDescriptorHandleForHeapStart();
-                let srv_gpu_base = comp.srv_heap.GetGPUDescriptorHandleForHeapStart();
-                let count = planes.len().min(MAX_PLANES as usize);
-                let mut before = Vec::with_capacity(count + 1);
-                for (i, &(tex, state)) in planes[..count].iter().enumerate() {
-                    let d = tex.GetDesc();
-                    let srv_fmt = swap_format(d.Format).unwrap_or(d.Format);
-                    let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
-                        ptr: srv_cpu_base.ptr + i * comp.srv_stride as usize,
-                    };
-                    self.device.CreateShaderResourceView(
-                        tex,
-                        Some(&D3D12_SHADER_RESOURCE_VIEW_DESC {
-                            Format: srv_fmt,
-                            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
-                            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
-                                Texture2D: D3D12_TEX2D_SRV {
-                                    MostDetailedMip: 0,
-                                    MipLevels: 1,
-                                    PlaneSlice: 0,
-                                    ResourceMinLODClamp: 0.0,
-                                },
-                            },
-                        }),
-                        handle,
-                    );
-                    let state = D3D12_RESOURCE_STATES(state as i32);
-                    if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
-                        before.push(transition(
-                            tex,
-                            state,
-                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        ));
-                    }
-                }
-                before.push(transition(
-                    &back,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                ));
-                list.ResourceBarrier(&before);
-                list.SetDescriptorHeaps(&[Some(comp.srv_heap.clone())]);
-                list.SetGraphicsRootSignature(&comp.root);
-                list.RSSetViewports(&[D3D12_VIEWPORT {
-                    TopLeftX: 0.0,
-                    TopLeftY: 0.0,
-                    Width: width as f32,
-                    Height: height as f32,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
-                }]);
-                list.RSSetScissorRects(&[RECT {
-                    left: 0,
-                    top: 0,
-                    right: width as i32,
-                    bottom: height as i32,
-                }]);
-                list.OMSetRenderTargets(1, Some(&rtv), false, None);
-                list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                for i in 0..count {
-                    list.SetPipelineState(if i == 0 { &comp.opaque } else { &comp.overlay });
-                    list.SetGraphicsRootDescriptorTable(
-                        0,
-                        D3D12_GPU_DESCRIPTOR_HANDLE {
-                            ptr: srv_gpu_base.ptr + (i as u64) * u64::from(comp.srv_stride),
-                        },
-                    );
-                    list.DrawInstanced(3, 1, 0, 0);
-                }
+                let (comp, planes) = composition.as_ref().expect("prepared composition");
+                comp.record(&self.device, list, &back, D3D12_RESOURCE_STATE_PRESENT, planes);
                 #[cfg(feature = "diagnostics")]
                 let (capture, probe) = {
                     list.ResourceBarrier(&[transition(
@@ -2175,20 +1950,6 @@ impl Host {
                     )]);
                     (None::<()>, None::<()>)
                 };
-                let mut after = Vec::with_capacity(count);
-                for &(tex, state) in &planes[..count] {
-                    let state = D3D12_RESOURCE_STATES(state as i32);
-                    if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
-                        after.push(transition(
-                            tex,
-                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                            state,
-                        ));
-                    }
-                }
-                if !after.is_empty() {
-                    list.ResourceBarrier(&after);
-                }
                 (capture, probe)
             };
             p.copy.close();
