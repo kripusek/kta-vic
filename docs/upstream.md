@@ -26,6 +26,10 @@ When a bulk read into a host buffer fails, Causeway queries the current region a
 
 The experimental Wave64 branch uses alfycs's implementation for compute groups larger than a native host wave. On the RTX 3060 Ti, three of four saved story compute programs passed DXIL validation and created native pipelines, up from one on the 60-second build. Two large-group compute pipelines were recovered. A fourth program requires a first-lane read in divergent control flow and is still refused. The 13 pipelines in the separate vertex and pixel sample continued to validate and build. The experimental branch still needs a story test. [Wave64 implementation and native results](https://github.com/Marvisak/VIctory/pull/189#issuecomment-7119069414)
 
+The merged Wave64 and renderer changes were tested offline against 177 shaders rejected during story loading. Two passed DXIL validation and created compute pipelines on WARP with a 32-lane host target. An earlier count of 97 included descriptor offsets that could select different lanes. The merged code requires proof that the offsets agree. A separate WARP test confirmed that a GPU-written argument buffer and count could reach an indirect clamp in the wrong resource state, so the new indirect path was held. [Wave64](https://github.com/ifBars/VICauseway/pull/1) and [renderer tests and review](https://github.com/ifBars/VICauseway/pull/2)
+
+Mesh pipeline streams now declare their triangle output topology. A reopened WARP pipeline library served all 21 requests in a synthetic test after the change, up from zero. The effect on story loading has not been measured. [Causeway PR](https://github.com/ifBars/VICauseway/pull/3) and [upstream mesh cache fix](https://github.com/Marvisak/VIctory/pull/352)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.
