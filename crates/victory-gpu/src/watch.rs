@@ -378,11 +378,14 @@ mod tests {
         } as usize;
         assert_ne!(p, 0);
         let (start, end) = (p, p + 4 * PAGE);
-        let (_, before) = writes(start, end, false).expect("watched");
-        assert!(before.is_empty());
+        let (baseline, before) = writes(start, end, false).expect("watched");
+        // An earlier allocation may have occupied these addresses. No page
+        // of the new allocation has been written during this asking.
+        assert!(before.iter().all(|&(_, epoch)| epoch < baseline));
         // SAFETY: committed pages of ours.
         unsafe { ((p + PAGE + 8) as *mut u8).write(1) };
-        let (now, after) = writes(start, end, false).expect("watched");
+        let (now, mut after) = writes(start, end, false).expect("watched");
+        after.retain(|&(_, epoch)| epoch > baseline);
         assert_eq!(after, [(p / PAGE + 1, now)]);
         // Another asker after the kernel's bit was cleared still sees it.
         let (later, again) = writes(p + PAGE, p + 2 * PAGE, false).expect("watched");
