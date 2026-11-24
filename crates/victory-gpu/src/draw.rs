@@ -1456,6 +1456,22 @@ mod tests {
     }
 
     fn color_texture(side: u32, mips: u16) -> Texture {
+        fixture_texture(
+            side,
+            mips,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+        )
+    }
+
+    fn fixture_texture(
+        side: u32,
+        mips: u16,
+        format: DXGI_FORMAT,
+        flags: D3D12_RESOURCE_FLAGS,
+        state: D3D12_RESOURCE_STATES,
+    ) -> Texture {
         let heap = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
             ..Default::default()
@@ -1466,12 +1482,12 @@ mod tests {
             Height: side,
             DepthOrArraySize: 1,
             MipLevels: mips,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Format: format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
             },
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            Flags: flags,
             ..Default::default()
         };
         let mut target = std::ptr::null();
@@ -1483,7 +1499,7 @@ mod tests {
                 (&raw const heap).cast(),
                 0,
                 (&raw const desc).cast(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32,
+                state.0 as u32,
                 null.cast(),
                 (&raw const iid).cast(),
                 &mut target,
@@ -1734,4 +1750,113 @@ mod tests {
         // Both draws must run to rotate the source red through green to blue.
         assert_mip_zero_pixels(host, &list, target, SIDE, [0, 0, 255, 255]);
     }
+    #[test]
+    fn depth_and_stencil_shader_views_read_their_own_planes() {
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_D24_UNORM_S8_UINT;
+
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let device = &host.device;
+        let (root, pso) = graphics_fixture(
+            device,
+            r#"
+                [RootSignature("RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0, numDescriptors=2))")]
+                float4 vs(uint id : SV_VertexID) : SV_Position {
+                    return float4(id == 2 ? 3 : -1, id == 1 ? -3 : 1, 0, 1);
+                }
+                Texture2D<float4> depth : register(t0);
+                Texture2D<uint4> stencil : register(t1);
+                float4 ps() : SV_Target0 {
+                    return float4(depth.Load(int3(0, 0, 0)).r,
+                                  float(stencil.Load(int3(0, 0, 0)).g) / 255.0, 0, 1);
+                }
+            "#,
+            &[DXGI_FORMAT_R8G8B8A8_UNORM],
+        );
+        const SIDE: u32 = 4;
+        let depth = fixture_texture(
+            SIDE,
+            1,
+            DXGI_FORMAT_D24_UNORM_S8_UINT,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        );
+        let target = color_texture(SIDE, 1);
+        let image = crate::resource::host_resource(depth.0).expect("depth texture");
+        let color = crate::resource::host_resource(target.0).expect("color target");
+        let list = host.new_list().unwrap();
+        let l = &list.list;
+        let heap = std::sync::Arc::new(crate::descriptor::host::HostHeap::new(false, 2).unwrap());
+        list.bind_heaps([Some(&heap), None]);
+        let dsv = D3D12_DEPTH_STENCIL_VIEW_DESC {
+            Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
+            ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+            ..Default::default()
+        };
+        let rtv = host.rtv(Some(color), None);
+        crate::list::ensure_state(&list, depth.0, D3D12_RESOURCE_STATE_DEPTH_WRITE.0 as u32);
+        crate::list::ensure_state(&list, target.0, D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32);
+        // SAFETY: the two textures and their descriptors outlive the recorded commands.
+        unsafe {
+            l.ClearDepthStencilView(
+                host.dsv(image, Some(&dsv)),
+                D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL,
+                0.25,
+                173,
+                None,
+            );
+            l.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0], None);
+        }
+        for (slot, format) in [DXGI_FORMAT_D24_UNORM_S8_UINT.0 as u32, 120].into_iter().enumerate() {
+            heap.make_at(
+                slot as u32,
+                &View::Shader(
+                    depth.0 as usize,
+                    Some([
+                        format,
+                        D3D12_SRV_DIMENSION_TEXTURE2D.0 as u32,
+                        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0,
+                    ]),
+                ),
+            );
+        }
+        assert_eq!(host.log_messages(), None, "depth/stencil SRV creation");
+        crate::list::ensure_state(
+            &list,
+            depth.0,
+            (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE).0 as u32,
+        );
+        viewports(&list, &[D3D12_VIEWPORT {
+            Width: SIDE as f32,
+            Height: SIDE as f32,
+            MaxDepth: 1.0,
+            ..Default::default()
+        }]);
+        scissors(&list, &[RECT {
+            right: SIDE as i32,
+            bottom: SIDE as i32,
+            ..Default::default()
+        }]);
+        // SAFETY: all referenced graphics and descriptor objects are live.
+        unsafe {
+            l.SetGraphicsRootSignature(&root);
+            l.SetPipelineState(&pso);
+            l.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            l.OMSetRenderTargets(1, Some(&rtv), false, None);
+            l.SetGraphicsRootDescriptorTable(0, heap.heap.GetGPUDescriptorHandleForHeapStart());
+            l.DrawInstanced(3, 1, 0, 0);
+        }
+        assert_mip_zero_pixels(host, &list, target.0, SIDE, [64, 173, 0, 255]);
+    }
+
 }
