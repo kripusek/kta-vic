@@ -5,8 +5,10 @@
 //! in that folder requests a frame instead. Explicitly listed frames are
 //! saved in both modes. Only in builds with diagnostics.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Graphics::Direct3D12::*;
@@ -45,7 +47,7 @@ pub(crate) fn wanted(n: u64) -> bool {
         return folder().is_some() && (n.is_power_of_two() || listed(n));
     };
     let mut next_poll = NEXT_POLL.lock().unwrap_or_else(|e| e.into_inner());
-    poll_marker(marker, &mut next_poll, Instant::now()) || listed(n)
+    poll_marker(marker, &mut next_poll, Instant::now()) || listed(n) || TARGET_REQUEST.armed(n)
 }
 
 fn poll_marker(path: &Path, next_poll: &mut Option<Instant>, now: Instant) -> bool {
@@ -281,73 +283,166 @@ pub(crate) fn save_read_back(
 /// structure: floats scaled by their largest value, depth by its range).
 /// The host copies are held: the title may release a target before the
 /// frame is presented.
-static TARGETS: std::sync::Mutex<Vec<(usize, std::sync::Arc<crate::resource::HostTexture>)>> =
-    std::sync::Mutex::new(Vec::new());
+type FrameTargets = Vec<(usize, Arc<crate::resource::HostTexture>)>;
+static TARGETS: Mutex<BTreeMap<u64, FrameTargets>> = Mutex::new(BTreeMap::new());
 
-fn dump_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| folder().is_some() && std::env::var_os("VICTORY_DUMP_TARGETS").is_some())
+#[derive(Debug, PartialEq, Eq)]
+enum TargetFilter {
+    All,
+    Match {
+        width: u64,
+        height: u32,
+        format: i32,
+    },
+}
+
+impl TargetFilter {
+    fn parse(value: &str) -> Option<Self> {
+        if value == "1" || value.is_empty() {
+            return Some(Self::All);
+        }
+        let (size, format) = value.split_once("-f")?;
+        let (width, height) = size.split_once('x')?;
+        let (width, height, format) = (
+            width.parse().ok()?,
+            height.parse().ok()?,
+            format.parse().ok()?,
+        );
+        (width > 0 && height > 0 && format > 0).then_some(Self::Match {
+            width,
+            height,
+            format,
+        })
+    }
+
+    fn matches(&self, desc: &D3D12_RESOURCE_DESC) -> bool {
+        desc.SampleDesc.Count == 1
+            && desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            && match *self {
+                Self::All => true,
+                Self::Match {
+                    width,
+                    height,
+                    format,
+                } => (desc.Width, desc.Height, desc.Format.0) == (width, height, format),
+            }
+    }
+}
+
+fn target_filter() -> Option<&'static TargetFilter> {
+    static FILTER: LazyLock<Option<TargetFilter>> = LazyLock::new(|| {
+        folder()?;
+        let value = std::env::var("VICTORY_DUMP_TARGETS").ok()?;
+        let filter = TargetFilter::parse(&value);
+        if filter.is_none() {
+            tracing::warn!(%value, "invalid VICTORY_DUMP_TARGETS; use 1 or <width>x<height>-f<format>");
+        }
+        filter
+    });
+    FILTER.as_ref()
+}
+
+struct TargetRequest {
+    frame: AtomicU64,
+    next_poll: Mutex<Option<Instant>>,
+}
+
+static TARGET_REQUEST: TargetRequest = TargetRequest {
+    frame: AtomicU64::new(0),
+    next_poll: Mutex::new(None),
+};
+
+impl TargetRequest {
+    fn armed(&self, frame: u64) -> bool {
+        frame != 0 && self.frame.load(Relaxed) == frame
+    }
+
+    fn poll(&self, marker: &Path, present: u64, now: Instant) -> Option<u64> {
+        let mut next = self.next_poll.lock().unwrap_or_else(|e| e.into_inner());
+        if self.frame.load(Relaxed) >= present || !poll_marker(marker, &mut next, now) {
+            return None;
+        }
+        // One intervening frame leaves time for this arm to become visible
+        // before the title starts recording the next frame's targets.
+        let selected = present.checked_add(2)?;
+        self.frame.store(selected, Relaxed);
+        Some(selected)
+    }
+}
+
+/// Arm a single future frame when the dedicated on-demand marker appears.
+pub(crate) fn poll_target_request(present: u64) {
+    static MARKER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        let TargetFilter::Match { .. } = target_filter()? else { return None };
+        (std::env::var("VICTORY_CAPTURE_ON_DEMAND").as_deref() == Ok("1"))
+            .then(|| folder().unwrap().join("capture-target-next"))
+    });
+    if let Some(marker) = MARKER.as_ref()
+        && let Some(frame) = TARGET_REQUEST.poll(marker, present, Instant::now())
+    {
+        tracing::info!(frame, "target and presentation capture armed");
+    }
+}
+
+pub(crate) fn wants_targets(frame: u64) -> bool {
+    listed(frame) || TARGET_REQUEST.armed(frame)
 }
 
 /// Notes a title texture the frame being built renders to or writes.
 pub(crate) fn note_target(resource: crate::object::This) {
-    if resource.is_null() || !dump_on() || !listed(crate::queue::presented() + 1) {
+    if resource.is_null() {
         return;
     }
-    let mut targets = TARGETS.lock().unwrap_or_else(|e| e.into_inner());
-    if !targets.iter().any(|&(r, _)| r == resource as usize)
-        && let Some(copy) = crate::resource::host_copy(resource)
-    {
+    let Some(filter) = target_filter() else {
+        return;
+    };
+    let frame = crate::queue::presented() + 1;
+    if !wants_targets(frame) {
+        return;
+    }
+    let Some(copy) = crate::resource::host_copy(resource) else {
+        return;
+    };
+    // SAFETY: the retained copy owns the texture.
+    if !filter.matches(&unsafe { copy.texture.GetDesc() }) {
+        return;
+    }
+    let mut frames = TARGETS.lock().unwrap_or_else(|e| e.into_inner());
+    if crate::queue::presented() + 1 != frame {
+        return;
+    }
+    let targets = frames.entry(frame).or_default();
+    if !targets.iter().any(|(_, prior)| Arc::ptr_eq(prior, &copy)) {
+        // The title address is just a label, even after the resource is released.
         targets.push((resource as usize, copy));
     }
 }
 
 /// At the present of frame `frame`: saves the noted targets.
 pub(crate) fn dump_targets(frame: u64) {
-    use std::sync::atomic::Ordering::Relaxed;
-    let targets = std::mem::take(&mut *TARGETS.lock().unwrap_or_else(|e| e.into_inner()));
-    let Some(host) = crate::host::host() else { return };
-    for (i, (resource, copy)) in targets.iter().enumerate() {
-        let texture = &copy.texture;
-        // SAFETY: a live resource.
-        let d = unsafe { texture.GetDesc() };
-        if d.SampleDesc.Count > 1 || d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D {
-            continue;
-        }
-        // Every submission has run; the dump's list moves it there and back.
-        let state = copy.state.load(Relaxed);
-        dump_one(host, texture, state, frame, i, *resource as crate::object::This, &d);
+    let targets = TARGETS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&frame);
+    let Some(targets) = targets else { return };
+    let Some(host) = crate::host::host() else {
+        return;
+    };
+    for (i, (label, copy)) in targets.iter().enumerate() {
+        dump_one(host, copy, frame, i, *label);
     }
 }
 
 fn dump_one(
     host: &crate::host::Host,
-    texture: &ID3D12Resource,
-    state: u32,
+    copy: &crate::resource::HostTexture,
     frame: u64,
     i: usize,
-    resource: crate::object::This,
-    d: &D3D12_RESOURCE_DESC,
+    label: usize,
 ) {
-    let Ok(list) = host.new_list() else { return };
-    let state = D3D12_RESOURCE_STATES(crate::host::legal_state(texture, state) as i32);
-    let copy = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    // SAFETY: an open list of ours and a live texture.
-    let read = unsafe {
-        if state != copy {
-            list.list
-                .ResourceBarrier(&[crate::host::transition(texture, state, copy)]);
-        }
-        let read = read_back(&host.device, &list.list, texture);
-        if state != copy {
-            list.list
-                .ResourceBarrier(&[crate::host::transition(texture, copy, state)]);
-        }
-        read
+    let Some((buffer, footprint)) = host.read_target(copy) else {
+        return;
     };
-    list.close();
-    host.execute(&[&list]);
-    let Some((buffer, footprint)) = read else { return };
     let f = footprint.Footprint;
     let mut data = std::ptr::null_mut();
     // SAFETY: the copy finished; the mapping spans the footprint's rows.
@@ -357,14 +452,22 @@ fn dump_one(
         }
         let pitch = f.RowPitch as usize;
         let rows = std::slice::from_raw_parts(data.cast::<u8>(), pitch * f.Height as usize);
-        if let Some(rgba) = to_rgba(f.Format.0 as u32, f.Width as usize, f.Height as usize, pitch, rows) {
+        if let Some(rgba) = to_rgba(
+            f.Format.0 as u32,
+            f.Width as usize,
+            f.Height as usize,
+            pitch,
+            rows,
+        ) {
             let name = format!(
-                "frame-{frame}-{i:02}-{resource:?}-{}x{}-f{}",
-                d.Width, d.Height, d.Format.0
+                "frame-{frame}-{i:02}-0x{label:x}-{}x{}-f{}",
+                f.Width,
+                f.Height,
+                copy.texture.GetDesc().Format.0
             );
             save_as(&name, f.Width, f.Height, f.Width as usize * 4, false, &rgba);
         } else {
-            tracing::info!(format = f.Format.0, ?resource, "target not dumped: format");
+            tracing::info!(format = f.Format.0, label, "target not dumped: format");
         }
         buffer.Unmap(0, None);
     }
@@ -599,6 +702,58 @@ pub(crate) fn recent_levels() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn target_marker_arms_one_future_frame() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("capture-target-next");
+        let request = TargetRequest {
+            frame: AtomicU64::new(0),
+            next_poll: Mutex::new(None),
+        };
+        let now = Instant::now();
+        assert!(!request.armed(0));
+        std::fs::write(&marker, []).unwrap();
+        assert_eq!(request.poll(&marker, 40, now), Some(42));
+        assert!(!marker.exists());
+        assert!(!request.armed(40));
+        assert!(!request.armed(41));
+        assert!(request.armed(42));
+        assert!(!request.armed(43));
+        assert_eq!(request.poll(&marker, 43, now + Duration::from_secs(1)), None);
+        assert!(!request.armed(45));
+    }
+
+    #[test]
+    fn target_filter_keeps_only_matching_single_sample_textures() {
+        use super::*;
+        let filter = TargetFilter::parse("2560x1440-f28").unwrap();
+        let mut d = D3D12_RESOURCE_DESC {
+            Width: 2560,
+            Height: 1440,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..Default::default()
+        };
+        assert!(filter.matches(&d));
+        d.Width -= 1;
+        assert!(!filter.matches(&d));
+        assert!(TargetFilter::parse("1").unwrap().matches(&d));
+        d.Width += 1;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        assert!(!filter.matches(&d));
+        d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.SampleDesc.Count = 4;
+        assert!(!filter.matches(&d));
+        for bad in ["0x1440-f28", "2560x1440-f0", "2560x1440", "2560x1440-f28,"] {
+            assert!(TargetFilter::parse(bad).is_none());
+        }
+    }
+
     #[test]
     fn capture_marker_consumes_only_empty_files_and_throttles_polls() {
         use super::{Duration, Instant, poll_marker};

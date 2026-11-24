@@ -541,6 +541,41 @@ impl Host {
         self.execute_locked(runs, &mut submitted)
     }
 
+    /// Reads a retained diagnostic target while holding the same lock as
+    /// submissions, so its actual state cannot change before our barriers.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn read_target(
+        &self,
+        target: &crate::resource::HostTexture,
+    ) -> Option<(ID3D12Resource, D3D12_PLACED_SUBRESOURCE_FOOTPRINT)> {
+        let list = self.new_list().ok()?;
+        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        let texture = &target.texture;
+        let before = D3D12_RESOURCE_STATES(legal_state(
+            texture,
+            target.state.load(Ordering::Relaxed),
+        ) as i32);
+        let source = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        // SAFETY: a live target and open list; the lock excludes submissions
+        // that update the tracked state. The target returns to that state.
+        let read = unsafe {
+            if before != source {
+                list.list
+                    .ResourceBarrier(&[transition(texture, before, source)]);
+            }
+            let read = crate::capture::read_back(&self.device, &list.list, texture)?;
+            if before != source {
+                list.list
+                    .ResourceBarrier(&[transition(texture, source, before)]);
+            }
+            read
+        };
+        list.close();
+        self.execute_locked(&[&list], &mut submitted)
+            .is_none()
+            .then_some(read)
+    }
+
     fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) -> Option<String> {
         let started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
@@ -2388,6 +2423,91 @@ fn pump() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn warp_target_readback_retains_backing_and_restores_render_target_state() {
+        use super::*;
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+        };
+        let host = create_device(true).expect("software WARP host");
+        if std::env::var_os("VICTORY_D3D12_DEBUG").is_some() {
+            assert!(
+                host.device.cast::<ID3D12InfoQueue>().is_ok(),
+                "D3D12 debug layer"
+            );
+        }
+        let mut texture = None;
+        // SAFETY: the output pointer and both descriptions are valid.
+        unsafe {
+            host.device.CreateCommittedResource(
+                &D3D12_HEAP_PROPERTIES {
+                    Type: D3D12_HEAP_TYPE_DEFAULT,
+                    ..Default::default()
+                },
+                D3D12_HEAP_FLAG_NONE,
+                &D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                    Width: 4,
+                    Height: 2,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                    ..Default::default()
+                },
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                None,
+                &mut texture,
+            )
+        }
+        .unwrap();
+        let target = std::sync::Arc::new(crate::resource::HostTexture {
+            texture: texture.unwrap(),
+            state: std::sync::atomic::AtomicU32::new(D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32),
+        });
+        let retained = target.clone();
+        drop(target);
+        let clear = |color| {
+            let list = host.new_list().unwrap();
+            let rtv = host.rtv(Some(&retained.texture), None);
+            // SAFETY: a valid RTV to the retained target in RENDER_TARGET state.
+            unsafe { list.list.ClearRenderTargetView(rtv, &color, None) };
+            list.close();
+            assert_eq!(host.execute_checked(&[&list]), None);
+        };
+        let pixels = || {
+            let (read, footprint) = host
+                .read_target(&retained)
+                .expect("checked diagnostic readback");
+            let mut data = std::ptr::null_mut();
+            // SAFETY: the fence completed and both rows are inside the footprint.
+            unsafe {
+                read.Map(0, None, Some(&mut data)).unwrap();
+                let start = data.cast::<u8>().add(footprint.Offset as usize);
+                let a = start.cast::<[u8; 4]>().read();
+                let b = start
+                    .add(footprint.Footprint.RowPitch as usize)
+                    .cast::<[u8; 4]>()
+                    .read();
+                read.Unmap(0, None);
+                [a, b]
+            }
+        };
+        clear([1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixels(), [[255, 0, 0, 255]; 2]);
+        assert_eq!(
+            retained.state.load(Ordering::Relaxed),
+            D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32
+        );
+        clear([0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(pixels(), [[0, 255, 0, 255]; 2]);
+    }
+
     #[test]
     fn sparse_copies_preserve_islands_and_observe_remaps() {
         use windows_sys::Win32::System::Memory::*;
