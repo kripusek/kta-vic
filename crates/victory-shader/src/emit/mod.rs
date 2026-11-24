@@ -136,6 +136,22 @@ pub struct HostShader {
 }
 
 impl HostShader {
+    /// Whether the DXIL requires direct indexing of the resource and sampler
+    /// heaps, in that order. Static samplers need no indexed sampler heap.
+    pub fn directly_indexed_heaps(&self) -> (bool, bool) {
+        let features = Container::parse(&self.dxil)
+            .ok()
+            .and_then(|c| {
+                let part = c.part(FourCC::SFI0)?;
+                crate::dxbc::u64_at(part.data, 0).ok()
+            })
+            .unwrap_or(0);
+        (
+            features & shader::flags::FEATURE_RESOURCE_HEAP != 0,
+            features & shader::flags::FEATURE_SAMPLER_HEAP != 0,
+        )
+    }
+
     /// Size of the user-data buffer the shader declares, in dwords (a
     /// multiple of 4; 0 when it reads none). Root constants must cover it.
     pub fn user_data_dwords(&self) -> u32 {
@@ -590,6 +606,29 @@ fn signature(part: &[u8]) -> Result<Vec<container::SigElement>, ShaderError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_heap_requirements_are_independent() {
+        let mut shader = super::HostShader {
+            stage: crate::HwStage::Cs,
+            dxil: super::container::build(&[]),
+            user_data: Vec::new(),
+            samplers: Vec::new(),
+            static_samplers: Vec::new(),
+            root_cbvs: Vec::new(),
+            root_srvs: Vec::new(),
+        };
+        assert_eq!(shader.directly_indexed_heaps(), (false, false));
+        for (features, expected) in [
+            (0u64, (false, false)),
+            (0x0200_0000, (true, false)),
+            (0x0400_0000, (false, true)),
+            (0x0600_0000, (true, true)),
+        ] {
+            shader.dxil = super::container::build(&[(b"SFI0", &features.to_le_bytes())]);
+            assert_eq!(shader.directly_indexed_heaps(), expected);
+        }
+    }
+
     use super::bitcode::Attr;
     use super::container::SigElement;
     use super::shader::Shader;
@@ -628,6 +667,161 @@ mod tests {
         let c = Container::parse(&container).unwrap();
         if let Err(e) = emit(&c, &native, &p, &st, &io, &res) {
             assert!(e.to_string().contains("its own value"), "{e}");
+        }
+    }
+
+    #[test]
+    fn direct_pixel_barycentrics_use_host_signature() {
+        // v0/v1 contain perspective I/J and v2/v3 linear I/J. Export
+        // both pairs directly, without v_interp to fold their uses away.
+        let words = [0xF800_180Fu32, 0x0302_0100, 0xBF81_0000];
+        let native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: false,
+            vgprs: 4,
+            layout: vec![],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![],
+                input_addr: (1 << 1) | (1 << 5),
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        };
+        let outputs = container::signature(
+            &[SigElement {
+                name: "SV_Target".into(),
+                index: 0,
+                kind: 16,
+                comp: 9,
+                interp: 0,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            }],
+            false,
+        );
+        let bytes = crate::dxbc::build(&[(FourCC::OSG1, &outputs)]);
+        let p = ir::build(&native.code, false, native.vgprs).unwrap();
+        let shader = emit(
+            &Container::parse(&bytes).unwrap(),
+            &native,
+            &p,
+            &structure::structure(&p).unwrap(),
+            &io::raise(&p, &native).unwrap(),
+            &resource::track(&p, &native.layout, native.stage).unwrap(),
+        )
+        .unwrap();
+        let container = Container::parse(&shader.dxil).unwrap();
+        let features = u64::from_le_bytes(
+            container
+                .part(FourCC::SFI0)
+                .unwrap()
+                .data
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(features & 0x2_0000, 0x2_0000);
+        let inputs = container.part(FourCC::ISG1).unwrap().data;
+        assert_eq!(crate::dxbc::u32_at(inputs, 0).unwrap(), 2);
+        for index in 0..2 {
+            let at = 8 + index * 32;
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 8).unwrap(), index as u32);
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 12).unwrap(), 23);
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 20).unwrap(), u32::MAX);
+            assert_eq!(inputs[at + 25], 0b110);
+        }
+        #[cfg(windows)]
+        {
+            let path = validator::Validator::default_path();
+            if let Ok(mut validator) = validator::Validator::load(path.as_deref()) {
+                validator.validate(&mut shader.dxil.clone()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn nested_pixel_phis_materialize_barycentric_input() {
+        let words = [
+            0xbf06_8000u32, // if s0 == 0, retain incoming v0
+            0xbf85_0001,
+            0x7e00_0281, // otherwise v0 = 1
+            0xbf06_8001, // first join; if s1 == 0, retain that join
+            0xbf85_0001,
+            0x7e00_0282, // otherwise v0 = 2
+            0xf800_180f, // second join; export v0 in every channel
+            0,
+            0xbf81_0000,
+        ];
+        let native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: false,
+            vgprs: 1,
+            layout: vec![crate::native::RootParam {
+                root: crate::native::RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 2,
+                base_register: 0,
+                user_data: 0,
+                slot: 1,
+            }],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![],
+                input_addr: 1 << 1,
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        };
+        let outputs = container::signature(
+            &[SigElement {
+                name: "SV_Target".into(),
+                index: 0,
+                kind: 16,
+                comp: 9,
+                interp: 0,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            }],
+            false,
+        );
+        let bytes = crate::dxbc::build(&[(FourCC::OSG1, &outputs)]);
+        let p = ir::build(&native.code, false, native.vgprs).unwrap();
+        let initial = p
+            .inputs
+            .iter()
+            .find(|(r, _)| *r == ir::Reg::V(0))
+            .unwrap()
+            .1;
+        let phis: Vec<_> = p.blocks.iter().flat_map(|block| &block.phis).collect();
+        let first = phis.iter().find(|phi| phi.args.contains(&initial)).unwrap();
+        assert!(phis.iter().any(|phi| phi.args.contains(&first.value)));
+        let shader = emit(
+            &Container::parse(&bytes).unwrap(),
+            &native,
+            &p,
+            &structure::structure(&p).unwrap(),
+            &io::raise(&p, &native).unwrap(),
+            &resource::track(&p, &native.layout, native.stage).unwrap(),
+        )
+        .unwrap();
+        let dxil = Container::parse(&shader.dxil).unwrap();
+        let inputs = dxil.part(FourCC::ISG1).unwrap().data;
+        assert_eq!(crate::dxbc::u32_at(inputs, 0).unwrap(), 1);
+        assert_eq!(crate::dxbc::u32_at(inputs, 20).unwrap(), 23);
+        assert_eq!(inputs[33], 0b010);
+        #[cfg(windows)]
+        if let Ok(mut validator) =
+            validator::Validator::load(validator::Validator::default_path().as_deref())
+        {
+            validator.validate(&mut shader.dxil.clone()).unwrap();
         }
     }
 

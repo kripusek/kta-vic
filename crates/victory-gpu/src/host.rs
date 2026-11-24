@@ -209,7 +209,10 @@ fn create_device(warp: bool) -> windows::core::Result<Host> {
                 if let Ok(d1) = l.cast::<ID3D12Debug1>() {
                     d1.SetEnableGPUBasedValidation(true);
                 }
-                if let Ok(d2) = l.cast::<ID3D12Debug2>() {
+                // Isolated WARP tests also validate resource-state transitions.
+                if !cfg!(test)
+                    && let Ok(d2) = l.cast::<ID3D12Debug2>()
+                {
                     d2.SetGPUBasedValidationFlags(
                         D3D12_GPU_BASED_VALIDATION_FLAGS_DISABLE_STATE_TRACKING,
                     );
@@ -527,13 +530,18 @@ impl Host {
 
     /// Runs closed lists and waits for them.
     pub(crate) fn execute(&self, runs: &[&HostList]) {
+        let _ = self.execute_checked(runs);
+    }
+
+    /// First debug-layer error from this submission, captured before the queue is cleared.
+    pub(crate) fn execute_checked(&self, runs: &[&HostList]) -> Option<String> {
         // One submission at a time from preparation to copy-back: snapshots
         // and the ranges shaders write are per host copy, not per submission.
         let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
-        self.execute_locked(runs, &mut submitted);
+        self.execute_locked(runs, &mut submitted)
     }
 
-    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) {
+    fn execute_locked(&self, runs: &[&HostList], submitted: &mut u64) -> Option<String> {
         let started = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::Submissions, 1);
@@ -623,21 +631,7 @@ impl Host {
         // submission, however many dispatches declared it (the world's
         // passes declare the same big ranges dozens of times).
         let copying = std::time::Instant::now();
-        // One list's lock at a time: a submission may name a list twice.
-        let mut back: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)> = Vec::new();
-        for list in runs {
-            for step in &list.deferred().copies {
-                if let Step::GpuWrite(shadow, address, len) = step
-                    && !back
-                        .iter()
-                        .any(|(s, a, l)| std::sync::Arc::ptr_eq(s, shadow) && (*a, *l) == (*address, *len))
-                {
-                    back.push((shadow.clone(), *address, *len));
-                }
-            }
-        }
-        for (shadow, address, len) in &back {
-            let (address, len) = (*address, *len);
+        for (shadow, address, len) in batch.gpu_writes {
             let written = shadow.copy_back(address, len);
             COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
         }
@@ -647,7 +641,7 @@ impl Host {
                 what.write(at as *mut u8, bytes);
             }
         }
-        self.log_messages();
+        self.log_messages()
     }
 
     /// With `VICTORY_D3D12_DRED`: the faulting address and the allocations
@@ -791,14 +785,14 @@ impl Host {
         first_error
     }
 
-    /// A host render target view of `resource`, valid until it is recorded.
+    /// A host render target view, valid until it is recorded.
     pub(crate) fn rtv(
         &self,
-        resource: &ID3D12Resource,
+        resource: Option<&ID3D12Resource>,
         desc: Option<&D3D12_RENDER_TARGET_VIEW_DESC>,
     ) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         let slot = self.next_rtv.fetch_add(1, Ordering::Relaxed) % RTV_RING;
-        // SAFETY: a slot of our heap and a live resource.
+        // SAFETY: a slot of our heap and a live resource or a typed null view.
         unsafe {
             let mut handle = self.rtvs.GetCPUDescriptorHandleForHeapStart();
             handle.ptr += (slot * self.rtv_size) as usize;
@@ -1255,9 +1249,7 @@ impl HostList {
                     continue;
                 }
                 Step::GpuWrite(shadow, address, len) => {
-                    // The shaders start from the title's data.
-                    batch.flush();
-                    shadow.writing(*address, *len);
+                    batch.gpu_write(shadow, *address, *len);
                     continue;
                 }
                 Step::Texture(staging) => {
@@ -1284,11 +1276,34 @@ impl HostList {
 #[derive(Default)]
 struct Batch {
     refreshes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
+    gpu_writes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
+    declared_writes: std::collections::HashSet<(usize, usize, usize)>,
     /// Staging buffers (by address) refreshed since the last title write.
     textures: std::collections::HashSet<usize>,
 }
 
 impl Batch {
+    fn new_gpu_write<T>(&mut self, shadow: &std::sync::Arc<T>, address: usize, len: usize) -> bool {
+        self.declared_writes
+            .insert((std::sync::Arc::as_ptr(shadow) as usize, address, len))
+    }
+
+    fn gpu_write(
+        &mut self,
+        shadow: &std::sync::Arc<crate::shadow::Shadow>,
+        address: usize,
+        len: usize,
+    ) {
+        if self.new_gpu_write(shadow, address, len) {
+            // The first declaration needs the refreshed bytes for its snapshot.
+            // Another declaration of this exact range is already pending until
+            // the GPU submission finishes, so it needs no refresh boundary.
+            self.flush();
+            shadow.writing(address, len);
+            self.gpu_writes.push((shadow.clone(), address, len));
+        }
+    }
+
     fn add(&mut self, shadow: &std::sync::Arc<crate::shadow::Shadow>, address: usize, len: usize) {
         let end = address + len;
         match self
@@ -2023,7 +2038,7 @@ impl Host {
                 }
             };
             p.copy.close();
-            self.execute_locked(&[&p.copy], &mut submitted);
+            let _ = self.execute_locked(&[&p.copy], &mut submitted);
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
@@ -2390,6 +2405,21 @@ mod tests {
 
     use super::Batch;
     use std::sync::Arc;
+
+    #[test]
+    fn exact_gpu_writes_are_declared_once_per_submission() {
+        let mut batch = Batch::default();
+        let (a, b) = (Arc::new(0), Arc::new(0));
+        assert!(batch.new_gpu_write(&a, 4096, 16));
+        assert!(!batch.new_gpu_write(&a.clone(), 4096, 16));
+        assert!(batch.new_gpu_write(&a, 4096, 32));
+        assert!(batch.new_gpu_write(&a, 4104, 16));
+        assert!(batch.new_gpu_write(&b, 4096, 16));
+        // CPU copies can flush refreshes, but these GPU writes stay pending.
+        batch.title_written();
+        assert!(!batch.new_gpu_write(&a, 4096, 16));
+        assert!(Batch::default().new_gpu_write(&a, 4096, 16));
+    }
 
     #[test]
     fn a_texture_is_checked_once_per_submission() {

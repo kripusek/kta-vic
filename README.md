@@ -104,6 +104,8 @@ victory config
 Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
 info and above).
 
+On CPUs that emulate CLZERO, `VICTORY_BATCH_CLZERO=1` enables batching for recognized 32 to 64 KiB clears. This option works in release and diagnostic builds. Its impact on story frame time has yet to be measured.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
@@ -122,6 +124,7 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
 | `VICTORY_CAPTURE=<dir>` | saves frames numbered with powers of two and any frames listed in `VICTORY_CAPTURE_FRAMES` |
 | `VICTORY_CAPTURE_ON_DEMAND=1` | saves listed frames plus one presented frame each time you create an empty `capture-next` file in the capture folder |
+| `VICTORY_CAPTURE_FAST=1` | skips the per-frame black-transition probe and keeps requested PNG captures |
 | `VICTORY_DUMP_TARGETS=1` | saves the render targets of explicitly listed capture frames |
 | `VICTORY_D3D12_DEBUG=1` | host debug layer |
 | `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |

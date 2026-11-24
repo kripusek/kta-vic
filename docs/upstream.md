@@ -30,6 +30,8 @@ The merged Wave64 and renderer changes were tested offline against 177 shaders r
 
 Mesh pipeline streams now declare their triangle output topology. A reopened WARP pipeline library served all 21 requests in a synthetic test after the change, up from zero. The effect on story loading has not been measured. [Causeway PR](https://github.com/ifBars/VICauseway/pull/3) and [upstream mesh cache fix](https://github.com/Marvisak/VIctory/pull/352)
 
+Causeway incorporates the pixel barycentrics, PNG capture and optional CLZERO changes from [cat4blep's VIctory branch](https://github.com/Marvisak/VIctory/compare/main...cat4blep:VIctory:main). The recovered story pixel shader created a WARP pipeline with its original vertex shader. A separate WARP draw verified that a null first render target preserves the second output. [Upstream render-target fix](https://github.com/Marvisak/VIctory/pull/450)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.

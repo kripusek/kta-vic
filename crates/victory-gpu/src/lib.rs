@@ -56,3 +56,15 @@ mod watch;
 pub use host::on_failure;
 #[cfg(windows)]
 pub use watch::{title_memory_remapped, writing as kernel_will_write};
+
+#[cfg(all(test, windows, feature = "diagnostics"))]
+mod test_shader;
+
+// D3D12 reads these exports from the test executable, independently of victory.exe.
+#[cfg(all(test, feature = "agility", target_env = "msvc"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKVersion: u32 = 620;
+
+#[cfg(all(test, feature = "agility", target_env = "msvc"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";

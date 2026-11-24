@@ -99,17 +99,17 @@ pub(crate) fn save(n: u64, width: u32, height: u32, pitch: usize, bgra: bool, ro
 fn save_as(name: &str, width: u32, height: u32, pitch: usize, bgra: bool, rows: &[u8]) {
     let Some(folder) = folder() else { return };
     let (w, h) = ((width / 2).max(1), (height / 2).max(1));
-    // Filter byte 0 per row, then RGB of every other pixel of every other row.
-    let mut raw = Vec::with_capacity((w as usize * 3 + 1) * h as usize);
-    for y in 0..h as usize {
-        raw.push(0);
+    // Each row starts with a zero filter byte, followed by downsampled RGB.
+    let row_bytes = w as usize * 3 + 1;
+    let mut raw = vec![0; row_bytes * h as usize];
+    for (y, scanline) in raw.chunks_exact_mut(row_bytes).enumerate() {
         let row = &rows[(2 * y).min(height as usize - 1) * pitch..];
-        for x in 0..w as usize {
+        for (x, pixel) in scanline[1..].chunks_exact_mut(3).enumerate() {
             let p = &row[(2 * x).min(width as usize - 1) * 4..][..3];
             if bgra {
-                raw.extend([p[2], p[1], p[0]]);
+                pixel.copy_from_slice(&[p[2], p[1], p[0]]);
             } else {
-                raw.extend_from_slice(p);
+                pixel.copy_from_slice(p);
             }
         }
     }
@@ -141,13 +141,26 @@ fn chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     png.extend(crc.to_be_bytes());
 }
 
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0; 256];
+    let mut byte = 0;
+    while byte < table.len() {
+        let mut crc = byte as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+            bit += 1;
+        }
+        table[byte] = crc;
+        byte += 1;
+    }
+    table
+};
+
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
-    for &b in bytes {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
-        }
+    for &byte in bytes {
+        crc = (crc >> 8) ^ CRC32_TABLE[usize::from((crc as u8) ^ byte)];
     }
     !crc
 }
@@ -175,13 +188,20 @@ pub(crate) fn read_back(
             Some(&mut total),
         );
     }
+    if total == u64::MAX {
+        return None;
+    }
+    // Our CPU readers take a slice of complete pitched rows, including
+    // padding in the last row that the GPU copy does not require.
+    let f = footprint.Footprint;
+    let pitched_bytes = u64::from(f.RowPitch) * u64::from(f.Height);
     let heap = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_READBACK,
         ..Default::default()
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-        Width: total,
+        Width: total.max(pitched_bytes),
         Height: 1,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -459,6 +479,11 @@ pub(crate) fn probe(
     list: &ID3D12GraphicsCommandList,
     texture: &ID3D12Resource,
 ) -> Option<ID3D12Resource> {
+    static FAST: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("VICTORY_CAPTURE_FAST").as_deref() == Ok("1"));
+    if *FAST {
+        return None;
+    }
     // SAFETY: a live resource.
     let d = unsafe { texture.GetDesc() };
     if !matches!(d.Format.0, 27..=29 | 87 | 90 | 91) {
