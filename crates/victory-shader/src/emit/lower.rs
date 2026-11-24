@@ -4799,19 +4799,23 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    fn cbuffer_row(&mut self, h: V, row: V) -> V {
+        self.s.op(
+            self.cur,
+            "cbufferLoadLegacy.i32",
+            Attr::ReadOnly,
+            self.s.t.cbuf_ret,
+            59,
+            &[h, row],
+        )
+    }
+
     /// The dword at a computed byte address of a constant buffer.
     fn cbuffer_dword(&mut self, h: V, a: V) -> V {
         let c = self.cur;
         let four = self.s.m.i32(4);
         let ri = self.s.m.bin(c, Bin::LShr, a, four);
-        let r = self.s.op(
-            c,
-            "cbufferLoadLegacy.i32",
-            Attr::ReadOnly,
-            self.s.t.cbuf_ret,
-            59,
-            &[h, ri],
-        );
+        let r = self.cbuffer_row(h, ri);
         let two = self.s.m.i32(2);
         let three = self.s.m.i32(3);
         let comp = self.s.m.bin(c, Bin::LShr, a, two);
@@ -7807,10 +7811,11 @@ impl<'a> Lower<'a> {
             let o = vaddr(self, u8::from(*idxen))?;
             off = self.s.m.bin(c, Bin::Add, off, o);
         }
-        if !matches!(
+        let scalar_offset = !matches!(
             soffset,
             Operand::Scalar { code: NULL, .. } | Operand::Const(128)
-        ) {
+        );
+        if scalar_offset {
             let so = self.operand(inst, soffset)?;
             off = self.s.m.bin(c, Bin::Add, off, so);
         }
@@ -7844,6 +7849,20 @@ impl<'a> Lower<'a> {
             let Some(Operand::Vector { reg, .. }) = *data else {
                 return Err("a buffer result");
             };
+            let immediate = !*offen && !scalar_offset && base == 0 && extra.is_none();
+            let first = u32::from(*offset % 16) / 4;
+            if immediate && offset.is_multiple_of(4) && first + count <= 4 {
+                // The only variable address term is a whole-row index. The
+                // immediate dwords all lie in one row, even if the byte address wraps.
+                let shift = self.s.m.i32(4);
+                let ri = self.s.m.bin(c, Bin::LShr, byte, shift);
+                let row = self.cbuffer_row(h, ri);
+                for k in 0..count {
+                    let x = self.s.m.extract(c, row, first + k);
+                    self.write(inst, Reg::V(reg + k as u8), x, guard);
+                }
+                return Ok(());
+            }
             for k in 0..count {
                 let four = self.s.m.i32(4 * k);
                 let a = self.s.m.bin(c, Bin::Add, byte, four);
