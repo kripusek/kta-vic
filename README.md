@@ -120,6 +120,7 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
 | `VICTORY_KEY_FILE=<path>` | reads one key per request, such as `Esc` or `Esc 2000` for a two-second hold. The default hold is 250 ms. |
 | `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
+| `VICTORY_BATCH_CLZERO=1` | batches recognized 32 to 64 KiB guest cache-line clears on CPUs that emulate CLZERO |
 | `VICTORY_CAPTURE=<dir>` | saves frames numbered with powers of two and any frames listed in `VICTORY_CAPTURE_FRAMES` |
 | `VICTORY_CAPTURE_ON_DEMAND=1` | saves listed frames plus one presented frame each time you create an empty `capture-next` file in the capture folder |
 | `VICTORY_CAPTURE_FAST=1` | skips the per-frame black-transition probe and keeps requested PNG captures |

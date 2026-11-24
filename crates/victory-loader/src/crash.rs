@@ -108,8 +108,16 @@ fn title_output() -> String {
     said.iter().map(|l| format!("  title said: {l}\n")).collect()
 }
 
+// With batching disabled, each CLZERO takes the original path without
+// reading surrounding code. The exception handler only reads this flag.
+static BATCH_CLZERO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Installs the handlers; call once before running title code.
 pub fn report_crashes() {
+    BATCH_CLZERO.store(
+        std::env::var("VICTORY_BATCH_CLZERO").as_deref() == Ok("1"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     unsafe extern "system" fn filter(info: *const EXCEPTION_POINTERS) -> i32 {
         // SAFETY: the system passes the exception being dispatched.
         unsafe { report_unhandled(info) };
@@ -155,7 +163,9 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
                 if record.ExceptionFlags & EXCEPTION_NONCONTINUABLE != 0 {
                     return false;
                 }
-                if crate::clzero::try_batch(context) {
+                if BATCH_CLZERO.load(std::sync::atomic::Ordering::Relaxed)
+                    && crate::clzero::try_batch(context)
+                {
                     return true;
                 }
                 ((context.Rax & !63) as *mut u8).write_bytes(0, 64);
