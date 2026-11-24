@@ -4,7 +4,9 @@ VI Causeway is an experimental Windows compatibility layer for the Xbox Series X
 
 ## Startup status
 
-On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally and began loading the story. On a first-boot test the title's stall watchdog terminated the process during the first world frames. On a returning profile, the opening led directly to the illustrated story loading screens. A Menu button press reached the input layer, but the pause menu did not render during the test.
+On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally. On a returning profile, the movie led directly to the illustrated story loading screens.
+
+With upstream's asynchronous pipeline compilation, the RTX 3060 Ti rendered the first story title card, **VICE CITY, TWO YEARS AGO**. With an empty host pipeline cache, world rendering ran at roughly 0.5–0.8 fps. The game continued presenting the title card while the Menu button was held and then presented black frames. In a later run with a warm cache and two shader fixes, Windows recovered the NVIDIA driver after a GPU hang during the first world submissions. The in-story pause menu remains unverified. [RTX 3060 Ti test results](https://github.com/Marvisak/VIctory/issues/71#issuecomment-7118069111)
 
 In a release-build comparison on that machine, the opening movie ran at 30 fps. Reusing texture row spans reduced reported texture preparation from 14.8–15.7 to 3.1–3.4 ms per movie frame. A process-only audio capture matched the original soundtrack through its fade with no measurable accumulated delay.
 
@@ -12,7 +14,7 @@ On a fresh profile, choose **Settings** at **Finish Setup?** with the controller
 
 On this Windows 10 and NVIDIA system, a separate Series S trial presented black frames through the player-selection phase. The verified startup above used the Series X profile.
 
-Upstream VIctory separately reports reaching the first mission on Windows 11 with a Radeon RX 6700 XT. Its world frames were black and took 1.5–3 seconds to render. [Upstream test results](https://github.com/Marvisak/VIctory/blob/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f/README.md#status-2026-11-23)
+On Windows 11 with a Radeon RX 6700 XT, upstream's pipeline-cache update rendered the first mission's title card. The following scene remained dark and ran at 0.5–1.8 seconds per frame. [Upstream test results](https://github.com/Marvisak/VIctory/blob/35b054ec038c11bc8a0de66b1eee764b1ad4f101/README.md#status-2026-11-23)
 
 Upstream reports that entering the world can reset the Windows display driver. The offline profile, opening movie, and first-run screens can be tested before entering the world.
 
@@ -111,14 +113,16 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_STACKS=20,60` | every thread's stack at those seconds |
 | `VICTORY_WATCH=<rva>,...` | logs a title u32 when it changes |
 | `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
+| `VICTORY_KEY_FILE=<path>` | reads one key per request, such as `Esc` or `Esc 2000` for a two-second hold. The default hold is 250 ms. |
 | `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_CAPTURE=<dir>` | saves presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
-| `VICTORY_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
+| `VICTORY_CAPTURE=<dir>` | saves frames numbered with powers of two and any frames listed in `VICTORY_CAPTURE_FRAMES` |
+| `VICTORY_CAPTURE_ON_DEMAND=1` | saves listed frames plus one presented frame each time you create an empty `capture-next` file in the capture folder |
+| `VICTORY_DUMP_TARGETS=1` | saves the render targets of explicitly listed capture frames |
 | `VICTORY_D3D12_DEBUG=1` | host debug layer |
-| `VICTORY_INDIRECT=1` | runs the title's indirect draws and dispatches (off: the world's first frame stalls with it) |
 | `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
 | `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
 | `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
+| `VICTORY_GPU_TIMING=1` | times GPU command lists individually by submitting them serially |
 | `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
 | `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
 

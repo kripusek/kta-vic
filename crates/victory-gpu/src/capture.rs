@@ -1,9 +1,13 @@
 //! Presented frames written to PNG files, to see what reaches the screen:
 //! with `VICTORY_CAPTURE=<folder>`, every frame whose number is a power of
 //! two (the frames the log reports) is saved as `frame-<n>.png`, at half
-//! size. Only in builds with diagnostics.
+//! size. With `VICTORY_CAPTURE_ON_DEMAND=1`, an empty `capture-next` file
+//! in that folder requests a frame instead. Explicitly listed frames are
+//! saved in both modes. Only in builds with diagnostics.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -31,7 +35,59 @@ pub(crate) fn listed(n: u64) -> bool {
 
 /// Whether frame `n` is saved.
 pub(crate) fn wanted(n: u64) -> bool {
-    folder().is_some() && (n.is_power_of_two() || listed(n))
+    static MARKER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        let folder = folder()?;
+        (std::env::var("VICTORY_CAPTURE_ON_DEMAND").as_deref() == Ok("1"))
+            .then(|| folder.join("capture-next"))
+    });
+    static NEXT_POLL: Mutex<Option<Instant>> = Mutex::new(None);
+    let Some(marker) = MARKER.as_ref() else {
+        return folder().is_some() && (n.is_power_of_two() || listed(n));
+    };
+    let mut next_poll = NEXT_POLL.lock().unwrap_or_else(|e| e.into_inner());
+    poll_marker(marker, &mut next_poll, Instant::now()) || listed(n)
+}
+
+fn poll_marker(path: &Path, next_poll: &mut Option<Instant>, now: Instant) -> bool {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FileDispositionInfo, SetFileInformationByHandle,
+    };
+
+    if next_poll.is_some_and(|at| now < at) {
+        return false;
+    }
+    *next_poll = Some(now + Duration::from_millis(100));
+    let Ok(file) = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    else {
+        return false;
+    };
+    let Ok(meta) = file.metadata() else {
+        return false;
+    };
+    if !meta.is_file()
+        || meta.len() != 0
+        || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return false;
+    }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: the handle has DELETE access and remains exclusive from the size
+    // check through deletion. A replacement file cannot be consumed by mistake.
+    unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        ) != 0
+    }
 }
 
 /// Saves 8-bit RGBA or BGRA rows (`pitch` bytes apart) as frame `n`.
@@ -518,6 +574,32 @@ pub(crate) fn recent_levels() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_marker_consumes_only_empty_files_and_throttles_polls() {
+        use super::{Duration, Instant, poll_marker};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capture-next");
+        let mut next = None;
+        let mut now = Instant::now();
+        let interval = Duration::from_millis(100);
+        assert!(!poll_marker(&path, &mut next, now));
+        std::fs::write(&path, []).unwrap();
+        assert!(!poll_marker(
+            &path,
+            &mut next,
+            now + Duration::from_millis(99)
+        ));
+        now += interval;
+        assert!(poll_marker(&path, &mut next, now));
+        assert!(!path.exists());
+        now += interval;
+        assert!(!poll_marker(&path, &mut next, now));
+        std::fs::write(&path, b"keep").unwrap();
+        now += interval;
+        assert!(!poll_marker(&path, &mut next, now));
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+    }
+
     #[test]
     fn crc_matches_the_png_check_value() {
         assert_eq!(super::crc32(b"IEND"), 0xae42_6082);

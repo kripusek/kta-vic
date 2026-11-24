@@ -2,6 +2,10 @@
 
 VI Causeway follows [Marvisak/VIctory](https://github.com/Marvisak/VIctory). The initial source revision was `1dd7afd`. The first upstream merge includes [`97c78d1`](https://github.com/Marvisak/VIctory/commit/97c78d1087808bd6ce5eabb5d566083a38406a90), including the NVIDIA descriptor heap correction, texture extent validation, and process exit watchdog.
 
+The next merge included pipeline compilation on worker threads, a persistent D3D12 pipeline library, and indirect draws. [Upstream revision 35b054e](https://github.com/Marvisak/VIctory/commit/35b054ec038c11bc8a0de66b1eee764b1ad4f101)
+
+Causeway subsequently picked up Yaekai's patches for null buffer descriptors and the `v_swap_b32` and `v_xnor_b32` shader instructions. Both instructions appeared in world compute shaders on the RTX 3060 Ti. [Upstream PR 57](https://github.com/Marvisak/VIctory/pull/57) · [Upstream PR 58](https://github.com/Marvisak/VIctory/pull/58)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.

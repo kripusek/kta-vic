@@ -1378,6 +1378,9 @@ struct Meter {
     frames: u32,
     drawn: u64,
     logged: std::time::Instant,
+    /// Frames since the copy counters were last drained for a log report.
+    #[cfg(feature = "diagnostics")]
+    copy_frames: u64,
     /// The caption the window had, once read.
     caption: Option<Vec<u16>>,
 }
@@ -1390,6 +1393,8 @@ impl Meter {
             frames: 0,
             drawn: crate::draw::drawn(),
             logged: now,
+            #[cfg(feature = "diagnostics")]
+            copy_frames: 0,
             caption: None,
         }
     }
@@ -1404,6 +1409,10 @@ impl Meter {
             return;
         }
         let drawn = crate::draw::drawn();
+        #[cfg(feature = "diagnostics")]
+        {
+            self.copy_frames = self.copy_frames.saturating_add(u64::from(self.frames));
+        }
         let frames = f64::from(self.frames);
         let fps = frames / elapsed.as_secs_f64();
         let ms = elapsed.as_secs_f64() * 1000.0 / frames;
@@ -1437,7 +1446,7 @@ impl Meter {
             );
             #[cfg(feature = "diagnostics")]
             {
-                crate::copystat::log(frames);
+                crate::copystat::log(std::mem::take(&mut self.copy_frames) as f64);
                 for (why, n) in drops.iter().take(40) {
                     tracing::info!(
                         "dropped {:.1}/frame without a host pipeline: {why}",

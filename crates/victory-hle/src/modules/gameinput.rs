@@ -818,7 +818,10 @@ extern "system" fn unregister_callback(this: This, token: u64, timeout: u64) -> 
             return true;
         }
         state = match deadline {
-            None => hub.returned.wait(state).unwrap_or_else(PoisonError::into_inner),
+            None => hub
+                .returned
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner),
             Some(deadline) => {
                 let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                     return false;
@@ -1239,8 +1242,20 @@ mod host {
         })
     }
 
-    /// The harness atomically renames a file containing one key to the
-    /// configured path. An exclusive delete-on-close read consumes it once.
+    #[cfg(feature = "input-replay")]
+    fn parse_command(value: &str) -> Option<(u8, u64)> {
+        let mut fields = value.split_ascii_whitespace();
+        let vk = virtual_key(fields.next()?)?;
+        let hold_ms = match fields.next() {
+            None => 250,
+            Some(ms) if ms.bytes().all(|b| b.is_ascii_digit()) => ms.parse().ok()?,
+            _ => return None,
+        };
+        (fields.next().is_none() && (1..=5000).contains(&hold_ms)).then_some((vk, hold_ms))
+    }
+
+    /// The harness atomically renames a file containing a key and optional hold
+    /// time in milliseconds. An exclusive delete-on-close read consumes it once.
     #[cfg(feature = "input-replay")]
     fn command_key(host: &mut Host) -> Option<u8> {
         use std::fs::OpenOptions;
@@ -1271,10 +1286,16 @@ mod host {
             .open(path)
             .ok()?;
         let mut value = String::new();
-        file.take(32).read_to_string(&mut value).ok()?;
-        let vk = virtual_key(&value)?;
-        tracing::info!(key = %value.trim(), "diagnostic key");
-        host.held_command = Some((vk, now + Duration::from_millis(250)));
+        const MAX_COMMAND_BYTES: usize = 32;
+        file.take(MAX_COMMAND_BYTES as u64 + 1)
+            .read_to_string(&mut value)
+            .ok()?;
+        if value.len() > MAX_COMMAND_BYTES {
+            return None;
+        }
+        let (vk, hold_ms) = parse_command(&value)?;
+        tracing::info!(key = %value.trim(), hold_ms, "diagnostic key");
+        host.held_command = Some((vk, now + Duration::from_millis(hold_ms)));
         Some(vk)
     }
 
@@ -1294,6 +1315,29 @@ mod host {
         assert_eq!(virtual_key("Enter\n"), Some(0x0D));
         assert_eq!(virtual_key("z"), Some(b'Z'));
         assert_eq!(virtual_key("unknown"), None);
+    }
+
+    #[cfg(feature = "input-replay")]
+    #[test]
+    fn command_key_accepts_one_key_and_a_bounded_hold() {
+        assert_eq!(parse_command("Enter\r\n"), Some((0x0D, 250)));
+        assert_eq!(parse_command(" Esc 1500\n"), Some((0x1B, 1500)));
+        assert_eq!(parse_command("z 1"), Some((b'Z', 1)));
+        assert_eq!(parse_command("z 5000"), Some((b'Z', 5000)));
+        for invalid in [
+            "",
+            "Unknown 1500",
+            "Esc 0",
+            "Esc 5001",
+            "Esc -1",
+            "Esc +1",
+            "Esc 1.5",
+            "Esc 1s",
+            "Esc 18446744073709551616",
+            "Esc 1 Enter",
+        ] {
+            assert_eq!(parse_command(invalid), None, "{invalid:?}");
+        }
     }
 
     #[test]
@@ -1627,7 +1671,16 @@ mod tests {
         let mut token = 0;
         let context = (&raw const hub.object).cast_mut().cast();
         assert_eq!(
-            register(&hub.object, std::ptr::null(), GAMEPAD_KIND, 1, 0, context, Some(slow), &mut token),
+            register(
+                &hub.object,
+                std::ptr::null(),
+                GAMEPAD_KIND,
+                1,
+                0,
+                context,
+                Some(slow),
+                &mut token
+            ),
             S_OK
         );
         host.lock().unwrap().pads[1] = Some(PadState::default());
@@ -1636,7 +1689,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         let unregister = slot::<extern "system" fn(This, u64, u64) -> bool, _>(&hub.object, 0x68);
-        assert!(!unregister(&hub.object, token, 5000), "times out while it runs");
+        assert!(
+            !unregister(&hub.object, token, 5000),
+            "times out while it runs"
+        );
         let leave = std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(50));
             LEAVE.store(true, Ordering::SeqCst);
