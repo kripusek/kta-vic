@@ -5,14 +5,12 @@ use super::bitcode::{Attr, Term};
 use super::container::SigElement;
 use super::host::{Dispatch, Draw, Host, Root, View};
 use super::shader::Shader;
-use super::{HostShader, lower, validator};
+use super::{HostShader, WaveRange, lower, validator};
+use crate::dxbc::{Container, FourCC, u32_at};
 use crate::native::{
     ComputeIo, HwStage, NativeProgram, ResourceType, RootParam, RootType, StageIo, UsedResource,
 };
 use crate::{io, ir, resource, structure};
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_FEATURE_D3D12_OPTIONS1, D3D12_FEATURE_DATA_D3D12_OPTIONS1,
-};
 
 const S_ENDPGM: u32 = 0xBF81_0000;
 
@@ -85,7 +83,20 @@ const fn iconst(n: u8) -> u16 {
     128 + n as u16
 }
 
-fn lower_and_validate(native: &NativeProgram, outputs: Vec<SigElement>) -> HostShader {
+fn psv_wave_size(shader: &HostShader) -> (u32, u32) {
+    let c = Container::parse(&shader.dxil).expect("valid container");
+    let psv = c.part(FourCC::PSV0).expect("PSV0 part").data;
+    (
+        u32_at(psv, 4 + 16).expect("wave_min"),
+        u32_at(psv, 4 + 20).expect("wave_max"),
+    )
+}
+
+fn lower_and_validate(
+    native: &NativeProgram,
+    outputs: Vec<SigElement>,
+    host_waves: Option<WaveRange>,
+) -> HostShader {
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
     let res = resource::track(&p, &native.layout, native.stage).expect("resource::track");
     let io = io::raise(&p, native).expect("io::raise");
@@ -100,6 +111,7 @@ fn lower_and_validate(native: &NativeProgram, outputs: Vec<SigElement>) -> HostS
         outputs,
         prims: Vec::new(),
         mesh_stride: 0,
+        host_waves,
     })
     .expect("lower");
 
@@ -123,7 +135,13 @@ fn lower_and_validate(native: &NativeProgram, outputs: Vec<SigElement>) -> HostS
     shader
 }
 
-fn build_cs(wave64: bool, threads: [u32; 3], lds_granules: u32, body: &[u32]) -> HostShader {
+fn build_cs(
+    wave64: bool,
+    threads: [u32; 3],
+    lds_granules: u32,
+    body: &[u32],
+    host_waves: Option<WaveRange>,
+) -> HostShader {
     let mut words = Vec::new();
     // s[4:5] = descriptor table address (heap index 0 -> byte offset 0).
     words.push(s_mov_b32(5, 0x80));
@@ -169,30 +187,13 @@ fn build_cs(wave64: bool, threads: [u32; 3], lds_granules: u32, body: &[u32]) ->
         io: StageIo::Cs(ComputeIo { rsrc2, threads }),
         code,
     };
-    lower_and_validate(&native, Vec::new())
-}
-
-fn supports_wave(host: &Host, wave: u32) -> bool {
-    let mut opt = D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
-    // SAFETY: plain D3D12 feature query with valid out pointer.
-    let ok = unsafe {
-        host.device.CheckFeatureSupport(
-            D3D12_FEATURE_D3D12_OPTIONS1,
-            (&raw mut opt).cast(),
-            size_of_val(&opt) as u32,
-        )
-    };
-    ok.is_ok()
-        && opt.WaveOps.as_bool()
-        && opt.WaveLaneCountMin <= wave
-        && wave <= opt.WaveLaneCountMax
+    lower_and_validate(&native, Vec::new(), host_waves)
 }
 
 fn dispatch_on_all(
     shader: &HostShader,
     constants: [u32; 4],
     out_dwords: u32,
-    required_wave: Option<u32>,
 ) -> Vec<(String, Vec<u32>)> {
     let mut results = Vec::new();
     for (label, warp) in [("hardware", false), ("warp", true)] {
@@ -200,12 +201,6 @@ fn dispatch_on_all(
             eprintln!("no SM 6.6 {label} device; skipped");
             continue;
         };
-        if let Some(w) = required_wave
-            && !supports_wave(&host, w)
-        {
-            eprintln!("{label}: does not support wave size {w}; skipped");
-            continue;
-        }
         let (root, pso) = host
             .compute_pipeline(shader)
             .unwrap_or_else(|e| panic!("{label}: compute_pipeline failed: {e}"));
@@ -302,17 +297,76 @@ fn wave64_small_group_runs_on_wave32_host() {
     body.push(vop2(0x1A, 5, iconst(2), 2)); // v_lshlrev_b32 v5, 2, v2
     body.extend_from_slice(&buffer_store_dword(4, 5, 8, true));
 
-    let shader = build_cs(true, [8, 4, 1], 0, &body);
+    // Without device capabilities (or on Wave64-only GCN/Vega), fall back to 64.
+    let fallback = build_cs(true, [8, 4, 1], 0, &body, None);
+    assert_eq!(psv_wave_size(&fallback), (64, 64));
+    let gcn = build_cs(
+        true,
+        [8, 4, 1],
+        0,
+        &body,
+        Some(WaveRange { min: 64, max: 64 }),
+    );
+    assert_eq!(psv_wave_size(&gcn), (64, 64));
+    // On a Wave32-only GPU (e.g. NVIDIA), pick 32.
+    let nv = build_cs(
+        true,
+        [8, 4, 1],
+        0,
+        &body,
+        Some(WaveRange { min: 32, max: 32 }),
+    );
+    assert_eq!(psv_wave_size(&nv), (32, 32));
+
     let base = 100u32;
-    for (label, words) in dispatch_on_all(&shader, [base, 0, 0, 0], 32, Some(32)) {
-        for (lane, &got) in words.iter().enumerate() {
+    let mut ran = 0;
+    for (label, warp) in [("hardware", false), ("warp", true)] {
+        let Ok(host) = Host::new(warp) else {
+            continue;
+        };
+        let Some(range) = host.wave_range() else {
+            continue;
+        };
+        let chosen = range.choose(64, 32);
+        if range.min > chosen || chosen > range.max {
+            eprintln!("{label}: wave range {range:?} cannot hold 32 lanes in one wave; skipped");
+            continue;
+        }
+        let shader = build_cs(true, [8, 4, 1], 0, &body, Some(range));
+        assert_eq!(psv_wave_size(&shader), (chosen, chosen));
+        let (root, pso) = host
+            .compute_pipeline(&shader)
+            .unwrap_or_else(|e| panic!("{label}: compute_pipeline failed: {e}"));
+        let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+        for u in &shader.user_data {
+            ud[u.index as usize] = match (u.root, u.slot) {
+                (RootType::Constants, 0) => [base, 0, 0, 0][u.dword as usize],
+                (RootType::Table, 1) => 0,
+                other => panic!("unexpected user data {other:?}"),
+            };
+        }
+        let out = host
+            .dispatch(
+                &root,
+                &pso,
+                &Dispatch {
+                    roots: vec![(0, Root::Constants(ud))],
+                    views: &[View::RawUav(32)],
+                    samplers: &[],
+                    groups: [1, 1, 1],
+                },
+            )
+            .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
+        for (lane, &got) in out[0].iter().enumerate() {
             let want = ((lane as u32) << 16) | (base + 5);
             assert_eq!(
                 got, want,
                 "{label}: lane {lane} = {got:#010x}, want {want:#010x}"
             );
         }
+        ran += 1;
     }
+    assert!(ran > 0, "no compatible SM 6.6 device available");
 }
 
 /// A 64-thread Wave64 compute shader that only uses `v_writelane_b32` /
@@ -331,8 +385,9 @@ fn wave64_64thread_sgpr_spills_run_on_wave32_host() {
     body.push(vop1(0x001, 2, sgpr(6))); // v_mov_b32 v2, s6
     body.extend_from_slice(&buffer_store_dword(2, 0, 8, false));
 
-    let shader = build_cs(true, [8, 8, 1], 0, &body);
-    for (label, words) in dispatch_on_all(&shader, [0x1234_0000, 0x0000_5678, 0, 0], 1, None) {
+    let shader = build_cs(true, [8, 8, 1], 0, &body, None);
+    assert_eq!(psv_wave_size(&shader), (0, u32::MAX));
+    for (label, words) in dispatch_on_all(&shader, [0x1234_0000, 0x0000_5678, 0, 0], 1) {
         assert_eq!(words[0], 0x1234_5678, "{label}: spilled SGPR sum mismatch");
     }
 }
@@ -345,8 +400,9 @@ fn wave64_unused_lds_header_does_not_force_wave64() {
     body.push(vop1(0x001, 2, sgpr(0))); // v_mov_b32 v2, s0
     body.extend_from_slice(&buffer_store_dword(2, 0, 8, false));
 
-    let shader = build_cs(true, [8, 8, 1], 1, &body); // 512 bytes LDS declared, unused
-    for (label, words) in dispatch_on_all(&shader, [0xDEAD_BEEF, 0, 0, 0], 1, None) {
+    let shader = build_cs(true, [8, 8, 1], 1, &body, None); // 512 bytes LDS declared, unused
+    assert_eq!(psv_wave_size(&shader), (0, u32::MAX));
+    for (label, words) in dispatch_on_all(&shader, [0xDEAD_BEEF, 0, 0, 0], 1) {
         assert_eq!(words[0], 0xDEAD_BEEF, "{label}: output mismatch");
     }
 }
@@ -402,7 +458,7 @@ fn pixel_shader_sgpr_spill_lowers_and_draws() {
         usage: 15,
         half: false,
     }];
-    let ps = lower_and_validate(&native, outputs);
+    let ps = lower_and_validate(&native, outputs, None);
     let vs = passthrough_vs();
     let vertices = [
         -1.0f32, -1.0, 0.5, 1.0, //

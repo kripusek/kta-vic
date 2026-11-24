@@ -50,6 +50,8 @@ pub(crate) struct Parts<'a> {
     pub prims: Vec<SigElement>,
     /// Mesh: what the group id arrives multiplied by.
     pub mesh_stride: u32,
+    /// Wave sizes supported by the target host GPU (`None`: console wave size).
+    pub host_waves: Option<super::WaveRange>,
 }
 
 enum Stop {
@@ -641,10 +643,14 @@ impl<'a> Lower<'a> {
             let threads = cs.threads.iter().product::<u32>();
             let one_wave = threads <= wave;
             if console_lanes || one_wave && s.lds_dwords > 0 && uses_lds {
-                // A group of at most 32 lanes leaves lanes 32..63 inactive on
-                // a Wave64 console, so a 32-lane host wave matches bit for bit
-                // and lets Wave32-only GPUs (e.g. NVIDIA) accept the pipeline.
-                s.wave_size = Some(if threads <= 32 { 32 } else { wave });
+                // Pick a host-supported wave size that still holds the group
+                // when the console's wave size is unsupported (e.g. a <=32-lane
+                // Wave64 group on a Wave32-only GPU), falling back to the
+                // console's wave size when nothing is reported or nothing fits.
+                s.wave_size = Some(
+                    x.host_waves
+                        .map_or(wave, |range| range.choose(wave, threads)),
+                );
             }
         }
         let mut no_barrier = HashSet::new();
