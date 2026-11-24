@@ -5083,7 +5083,11 @@ impl<'a> Lower<'a> {
                         let s = self.s.m.bin(c, op, lane, nn);
                         // Left: pos + n < 16; right: pos >= n.
                         let bound = if left { k(self, 16 - n) } else { nn };
-                        (s, Some(self.s.m.cmp(c, p, pos, bound)))
+                        let inside = self.s.m.cmp(c, p, pos, bound);
+                        // Edge lanes still execute the shuffle. Use their own lane
+                        // as the source before applying bound_ctrl to the result.
+                        let src = self.s.m.select(c, inside, s, lane);
+                        (src, Some(inside))
                     }
                     0x121..=0x12F => {
                         let nn = k(self, n);
