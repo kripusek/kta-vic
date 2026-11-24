@@ -1149,6 +1149,24 @@ impl State {
         list.note_op(|| {
             self.op_text(format!("indirect kind {kind} max {max} at {arguments:#x}"), kind == DISPATCH)
         });
+        #[cfg(feature = "diagnostics")]
+        if kind == MESH && let Some((frame, sequence)) = crate::indirect::capture::claim() {
+            use crate::indirect::capture::{Call, record};
+            record(
+                list,
+                Call {
+                    frame,
+                    sequence,
+                    pipeline: self.pipeline,
+                    shaders: crate::pipeline::captured_shaders(self.pipeline as This),
+                    arguments,
+                    max,
+                    stride,
+                },
+                (&args.buffer, args.offset(arguments)),
+                counter.as_ref().map(|(s, at)| (&s.buffer, s.offset(*at))),
+            );
+        }
         // SAFETY: an open list with everything set; the buffers are host
         // copies the list keeps alive (refresh), the signature is cached.
         unsafe {
