@@ -58,6 +58,7 @@ pub(crate) struct State {
     pipeline: usize,
     /// View heap, sampler heap.
     heaps: [usize; 2],
+    heaps_dirty: bool,
     graphics: Vec<Root>,
     compute: Vec<Root>,
     vertex: [VertexView; 32],
@@ -196,6 +197,7 @@ impl State {
                 self.heaps[usize::from(samplers)] = h as usize;
             }
         }
+        self.heaps_dirty = true;
     }
 
     fn roots(&mut self, compute: bool) -> &mut Vec<Root> {
@@ -407,16 +409,19 @@ impl State {
         let l = &list.list;
         // Heaps first: a root signature with directly indexed heaps must be
         // set after them.
-        let heaps = self.heaps.map(|h| {
-            (h != 0)
-                .then(|| crate::descriptor::heap(h as This).host())
-                .flatten()
-        });
-        let native = heaps.map(|h| h.map_or(0, |heap| heap.heap.as_raw() as usize));
-        if self.host_heaps != native {
-            list.bind_heaps(heaps);
-            self.host_heaps = native;
-            self.host_roots = [0; 2];
+        if self.heaps_dirty {
+            let heaps = self.heaps.map(|h| {
+                (h != 0)
+                    .then(|| crate::descriptor::heap(h as This).host())
+                    .flatten()
+            });
+            let native = heaps.map(|h| h.map_or(0, |heap| heap.heap.as_raw() as usize));
+            if self.host_heaps != native {
+                list.bind_heaps(heaps);
+                self.host_heaps = native;
+                self.host_roots = [0; 2];
+            }
+            self.heaps_dirty = false;
         }
         let root = p.root.as_raw() as usize;
         if self.host_roots[usize::from(compute)] != root {
