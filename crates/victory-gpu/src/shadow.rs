@@ -274,6 +274,15 @@ impl Shadow {
     /// records (a fence list read as -1, title+0x4e9b54a). Returns the bytes
     /// written.
     pub(crate) fn copy_back(&self, address: usize, len: usize) -> usize {
+        self.copy_back_using(address, len, merge_gpu_writes)
+    }
+
+    fn copy_back_using(
+        &self,
+        address: usize,
+        len: usize,
+        merge: impl Fn(&mut [u8], &mut [u8], &mut [u8]) -> bool,
+    ) -> usize {
         let mut before = self.before.lock().unwrap_or_else(|e| e.into_inner());
         let Before {
             snapshot,
@@ -318,16 +327,7 @@ impl Shadow {
                     // Title memory with the GPU's bytes put in; the copy
                     // and its baseline both take the current bytes so overlapping
                     // ranges cannot replay a CPU update as a shader write.
-                    let mut changed = false;
-                    for ((t, h), o) in title.iter_mut().zip(host.iter_mut()).zip(old) {
-                        if *h != *o && *t != *h {
-                            *t = *h;
-                            changed = true;
-                        }
-                        *h = *t;
-                        *o = *t;
-                    }
-                    if changed {
+                    if merge(title, host, old) {
                         crate::watch::writing(start + at, n);
                         crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
                         written += n;
@@ -678,6 +678,19 @@ pub(crate) fn near(va: u64) -> String {
     text
 }
 
+/// Keep title changes except where the GPU changed the submitted bytes.
+fn merge_gpu_writes(title: &mut [u8], host: &mut [u8], before: &mut [u8]) -> bool {
+    let mut changed = false;
+    for ((title, host), before) in title.iter_mut().zip(host).zip(before) {
+        let merged = if *host == *before { *title } else { *host };
+        changed |= merged != *title;
+        *title = merged;
+        *host = merged;
+        *before = merged;
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,6 +853,113 @@ mod tests {
             cached[2],
             baseline[2].as_secs_f64() / cached[2].as_secs_f64(),
         );
+    }
+
+    #[test]
+    fn merged_gpu_writes_keep_uncontested_title_bytes() {
+        let mut title = [0; 67];
+        let mut host = title;
+        let mut before = title;
+        let title = &mut title[1..];
+        let host = &mut host[1..];
+        let before = &mut before[1..];
+        title[1] = 2; // Title-only change.
+        title[32] = 3;
+        host[32] = 4; // Conflicting change.
+        title[33] = 5;
+        host[33] = 5; // Title already holds the shader's value.
+        host[65] = 6; // Shader-only change in the tail.
+
+        assert!(merge_gpu_writes(title, host, before));
+        assert_eq!([title[1], title[32], title[33], title[65]], [2, 4, 5, 6]);
+        assert_eq!(title, host);
+        assert_eq!(title, before);
+        title[32] = 7;
+        assert!(!merge_gpu_writes(title, host, before));
+        assert_eq!(host[32], 7);
+        assert_eq!(before[32], 7);
+    }
+
+    #[test]
+    #[ignore = "synthetic CPU writeback benchmark"]
+    fn benchmark_shadow_writeback_merge() {
+        use std::time::{Duration, Instant};
+
+        fn baseline(title: &mut [u8], host: &mut [u8], before: &mut [u8]) -> bool {
+            let mut changed = false;
+            for ((t, h), o) in title.iter_mut().zip(host.iter_mut()).zip(before) {
+                if *h != *o && *t != *h {
+                    *t = *h;
+                    changed = true;
+                }
+                *h = *t;
+                *o = *t;
+            }
+            changed
+        }
+
+        const SIZE: usize = 4 << 20;
+        let host = host().expect("WARP host");
+        let memory = crate::resource::Memory::zeroed(SIZE as u64, PAGE as u64).unwrap();
+        let base = memory.address() as usize;
+        let (buffer, data) = host.shared_buffer(SIZE as u64).unwrap();
+        // SAFETY: the buffer stays live until this fixture returns.
+        let gpu = unsafe { buffer.GetGPUVirtualAddress() };
+        let shadow = Shadow::new(buffer, data, gpu, base as u64, SIZE as u64);
+        let run = |dense: bool, original: bool| {
+            // SAFETY: both addresses cover SIZE bytes and this test owns them.
+            unsafe {
+                (base as *mut u8).write_bytes(1, SIZE);
+                data.write_bytes(1, SIZE);
+            }
+            shadow.writing(base, SIZE);
+            shadow.writing(base + PAGE / 2, SIZE - PAGE / 2);
+            for at in (0..SIZE).step_by(PAGE) {
+                poke(base + at + 1, 5);
+                poke(data as usize + at + 2, 9);
+                if dense {
+                    // SAFETY: the first half of this page lies inside the test buffer.
+                    unsafe { data.add(at + 8).write_bytes(9, PAGE / 2 - 8) };
+                }
+            }
+            let started = Instant::now();
+            let mut written = 0;
+            for (from, len) in [(base, SIZE), (base + PAGE / 2, SIZE - PAGE / 2)] {
+                written += if original {
+                    shadow.copy_back_using(from, len, baseline)
+                } else {
+                    shadow.copy_back(from, len)
+                };
+            }
+            let elapsed = started.elapsed();
+            assert_eq!(written, SIZE);
+            let end = if dense { 9 } else { 1 };
+            for at in (0..SIZE).step_by(PAGE) {
+                assert_eq!(peek(base + at + 1), 5);
+                assert_eq!(peek(base + at + 2), 9);
+                assert_eq!(peek(base + at + PAGE / 2 - 1), end);
+                assert_eq!(peek(base + at + PAGE / 2), 1);
+            }
+            elapsed
+        };
+        for dense in [false, true] {
+            run(dense, true);
+            run(dense, false);
+            let mut before = [Duration::ZERO; 11];
+            let mut after = before;
+            for i in 0..before.len() {
+                if i % 2 == 0 {
+                    before[i] = run(dense, true);
+                    after[i] = run(dense, false);
+                } else {
+                    after[i] = run(dense, false);
+                    before[i] = run(dense, true);
+                }
+            }
+            before.sort_unstable();
+            after.sort_unstable();
+            eprintln!("dense={dense}: {:?} -> {:?}", before[5], after[5]);
+        }
     }
 
     fn title() -> Option<(Vec<u8>, usize, Shadow)> {
