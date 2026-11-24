@@ -9,8 +9,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{Interface, PCSTR};
 
-use super::HostShader;
 use super::container::SigElement;
+use super::{HostShader, Wave64Mode};
 use crate::dxbc::{Container, FourCC};
 
 pub struct Host {
@@ -115,6 +115,27 @@ impl Host {
                 min: opt.WaveLaneCountMin,
                 max: opt.WaveLaneCountMax,
             })
+    }
+
+    /// Whether the host supports compute shaders requiring 64-lane waves.
+    pub fn supports_wave64(&self) -> bool {
+        self.wave_range().is_some_and(|r| r.supports(64))
+    }
+
+    /// Whether the host supports compute shaders requiring 32-lane waves.
+    pub fn supports_wave32(&self) -> bool {
+        self.wave_range().is_some_and(|r| r.supports(32))
+    }
+
+    /// Best Wave64 compute lowering strategy supported by this host device.
+    pub fn recommended_wave64_mode(&self) -> Wave64Mode {
+        if self.supports_wave64() {
+            Wave64Mode::Native
+        } else if self.supports_wave32() {
+            Wave64Mode::Wave32
+        } else {
+            Wave64Mode::Emulate
+        }
     }
 
     /// The root signature translated shaders expect: user data per stage
@@ -1395,6 +1416,49 @@ impl Host {
             }
             drop(keep);
             Ok(out)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emit::bitcode::Term;
+    use crate::emit::shader::Shader;
+
+    fn cs_with_wave_size(wave_size: Option<u32>) -> HostShader {
+        let mut s = Shader::new(false);
+        s.threads = Some([64, 1, 1]);
+        s.wave_size = wave_size;
+        s.m.terminate(s.entry, Term::Ret);
+        HostShader {
+            stage: crate::HwStage::Cs,
+            dxil: s.finish(),
+            user_data: Vec::new(),
+            samplers: Vec::new(),
+            static_samplers: Vec::new(),
+            root_cbvs: Vec::new(),
+            root_srvs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn recommended_wave64_mode_matches_device_capabilities() {
+        for warp in [false, true] {
+            let Ok(h) = Host::new(warp) else {
+                continue;
+            };
+            let mode = h.recommended_wave64_mode();
+            let required_wave = match mode {
+                Wave64Mode::Native => Some(64),
+                Wave64Mode::Wave32 => Some(32),
+                Wave64Mode::Emulate => None,
+            };
+            h.compute_pipeline(&cs_with_wave_size(required_wave))
+                .expect("recommended Wave64 mode should build a compute PSO");
+            if warp {
+                assert_eq!(mode, Wave64Mode::Emulate);
+            }
         }
     }
 }

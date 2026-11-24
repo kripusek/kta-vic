@@ -122,6 +122,7 @@ fn lower_and_validate(
         prims: Vec::new(),
         mesh_stride: 0,
         host_waves,
+        options: super::TranslateOptions::default(),
     })
     .expect("lower");
 

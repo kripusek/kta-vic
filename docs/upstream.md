@@ -24,6 +24,8 @@ The final 60-second test includes Dom's changes for reconstructing a scalar buff
 
 When a bulk read into a host buffer fails, Causeway queries the current region and zero-fills unmapped spans. A 32 MiB synthetic copy with 2 MiB committed took 1.23 ms compared with 27.36 ms using page retries, with identical bytes. Across the first six complete world samples, median CPU copy time fell from 322 to 160 ms per frame between the two builds. The runs also differed in shader coverage, pipeline compilation and draw counts. Overall frame time still exceeds the 33.3 ms target.
 
+The experimental Wave64 branch uses alfycs's implementation for compute groups larger than a native host wave. On the RTX 3060 Ti, three of four saved story compute programs passed DXIL validation and created native pipelines, up from one on the 60-second build. Two large-group compute pipelines were recovered. A fourth program requires a first-lane read in divergent control flow and is still refused. The 13 pipelines in the separate vertex and pixel sample continued to validate and build. The experimental branch still needs a story test. [Wave64 implementation and native results](https://github.com/Marvisak/VIctory/pull/189#issuecomment-7119069414)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.
