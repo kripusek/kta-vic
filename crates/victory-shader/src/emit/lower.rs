@@ -334,12 +334,15 @@ fn unsupported(offset: usize, what: Why) -> Stop {
     Stop::Fail(ShaderError::Unsupported { offset, what })
 }
 
-fn const_lane(op: Operand) -> Option<u32> {
-    match op {
-        Operand::Const(c) => crate::resource::inline(c),
-        Operand::Literal(x) => Some(x),
-        _ => None,
-    }
+/// Constant lane index, masked to the hardware's low bits (`lane & 63` in
+/// Wave64, `lane & 31` in Wave32) so aliased lanes such as 67 and 3 compare equal.
+fn const_lane(op: Operand, wave64: bool) -> Option<u32> {
+    let raw = match op {
+        Operand::Const(c) => crate::resource::inline(c)?,
+        Operand::Literal(x) => x,
+        _ => return None,
+    };
+    Some(raw & if wave64 { 63 } else { 31 })
 }
 
 /// Resolves SGPR spills through VGPR lanes (`v_writelane_b32` ->
@@ -427,7 +430,7 @@ fn resolve_spills(p: &Program, st: &Structured) -> (HashMap<Site, Spill>, HashSe
         let (Some(Operand::Vector { reg, .. }), [value, at]) = (w.dst, &w.src[..]) else {
             return Err(());
         };
-        if const_lane(*at).ok_or(())? != lane {
+        if const_lane(*at, p.wave64).ok_or(())? != lane {
             return walk(
                 p,
                 st,
@@ -469,7 +472,9 @@ fn resolve_spills(p: &Program, st: &Structured) -> (HashMap<Site, Spill>, HashSe
             let [Operand::Vector { reg, .. }, lane_op] = v.src[..] else {
                 continue;
             };
-            let (Some(lane), Some(vgpr_val)) = (const_lane(lane_op), inst.read(Reg::V(reg))) else {
+            let (Some(lane), Some(vgpr_val)) =
+                (const_lane(lane_op, p.wave64), inst.read(Reg::V(reg)))
+            else {
                 continue;
             };
             if let Ok(Some(spill)) = walk(p, st, &def_site, &phi_at, vgpr_val, lane, &mut Vec::new())

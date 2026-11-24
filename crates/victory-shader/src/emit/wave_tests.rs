@@ -390,6 +390,25 @@ fn wave64_64thread_sgpr_spills_run_on_wave32_host() {
     for (label, words) in dispatch_on_all(&shader, [0x1234_0000, 0x0000_5678, 0, 0], 1) {
         assert_eq!(words[0], 0x1234_5678, "{label}: spilled SGPR sum mismatch");
     }
+
+    // Hardware masks lane numbers to 6 bits in Wave64, so writing lane 67
+    // overwrites lane 3 (67 & 63 == 3).
+    let mut aliased = Vec::new();
+    aliased.extend_from_slice(&vop3_2(0x361, 5, sgpr(0), iconst(3))); // v_writelane_b32 v5, s0, 3
+    aliased.extend_from_slice(&vop3_2(0x361, 5, sgpr(1), 0xFF)); // v_writelane_b32 v5, s1, 67
+    aliased.push(67);
+    aliased.extend_from_slice(&vop3_2(0x360, 6, vgpr(5), iconst(3))); // v_readlane_b32 s6, v5, 3
+    aliased.push(vop1(0x001, 2, sgpr(6)));
+    aliased.extend_from_slice(&buffer_store_dword(2, 0, 8, false));
+
+    let aliased_shader = build_cs(true, [8, 8, 1], 0, &aliased, None);
+    assert_eq!(psv_wave_size(&aliased_shader), (0, u32::MAX));
+    for (label, words) in dispatch_on_all(&aliased_shader, [0xAAAA_AAAA, 0x5555_5555, 0, 0], 1) {
+        assert_eq!(
+            words[0], 0x5555_5555,
+            "{label}: aliased lane 67 must overwrite lane 3"
+        );
+    }
 }
 
 /// A 64-thread Wave64 compute shader with a non-zero LDS header field but no
