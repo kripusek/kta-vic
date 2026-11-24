@@ -1390,9 +1390,9 @@ impl HostList {
     }
 }
 
-/// A submission's refreshes not done yet, merged per buffer copy into the
-/// range that covers them: done before a step that writes title memory or
-/// gives a range to shaders, and before the lists run.
+/// A submission's pending refreshes, grouped by buffer and nearby pages.
+/// Flush them before a step writes title memory, before the buffer's
+/// shader-write snapshot, and before the lists run.
 ///
 /// Also the textures brought up to date in the submission so far: most
 /// lists of a world submission sample the same textures, and a texture in
@@ -1400,13 +1400,50 @@ impl HostList {
 /// once, it is checked again only after a step that writes title memory.
 #[derive(Default)]
 struct Batch {
-    refreshes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
+    refreshes: Vec<(std::sync::Arc<crate::shadow::Shadow>, RefreshRanges)>,
     gpu_writes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
     declared_writes: std::collections::HashSet<(usize, usize, usize)>,
     #[cfg(test)]
     updates: usize,
     /// Staging buffers (by address) refreshed since the last title write.
     textures: std::collections::HashSet<usize>,
+}
+
+/// Keep the common contiguous case inline. Sort disjoint spans once, when
+/// a GPU write needs this shadow's snapshot or the submission flushes it.
+struct RefreshRanges {
+    first: (usize, usize),
+    others: Vec<(usize, usize)>,
+}
+
+impl RefreshRanges {
+    fn add(&mut self, from: usize, to: usize) {
+        let last = self.others.last_mut().unwrap_or(&mut self.first);
+        if from <= last.1 && last.0 <= to {
+            *last = (last.0.min(from), last.1.max(to));
+        } else {
+            self.others.push((from, to));
+        }
+    }
+
+    fn flush(mut self, shadow: &crate::shadow::Shadow) {
+        if self.others.is_empty() {
+            refresh_shadow(shadow, self.first.0, self.first.1);
+            return;
+        }
+        self.others.push(self.first);
+        self.others.sort_unstable();
+        let (mut start, mut end) = self.others[0];
+        for &(from, to) in &self.others[1..] {
+            if from / crate::watch::PAGE <= end.div_ceil(crate::watch::PAGE) {
+                end = end.max(to);
+            } else {
+                refresh_shadow(shadow, start, end);
+                (start, end) = (from, to);
+            }
+        }
+        refresh_shadow(shadow, start, end);
+    }
 }
 
 impl Batch {
@@ -1429,8 +1466,8 @@ impl Batch {
                 .iter()
                 .position(|(pending, ..)| std::sync::Arc::ptr_eq(pending, shadow))
             {
-                let (copy, from, to) = self.refreshes.remove(index);
-                refresh_shadow(&copy, from, to);
+                let (copy, ranges) = self.refreshes.remove(index);
+                ranges.flush(&copy);
                 #[cfg(test)]
                 {
                     self.updates += 1;
@@ -1442,14 +1479,23 @@ impl Batch {
     }
 
     fn add(&mut self, shadow: &std::sync::Arc<crate::shadow::Shadow>, address: usize, len: usize) {
-        let end = address + len;
+        if len == 0 {
+            return;
+        }
+        let end = address.saturating_add(len);
         match self
             .refreshes
             .iter_mut()
             .find(|(s, ..)| std::sync::Arc::ptr_eq(s, shadow))
         {
-            Some((_, from, to)) => (*from, *to) = ((*from).min(address), (*to).max(end)),
-            None => self.refreshes.push((shadow.clone(), address, end)),
+            Some((_, ranges)) => ranges.add(address, end),
+            None => self.refreshes.push((
+                shadow.clone(),
+                RefreshRanges {
+                    first: (address, end),
+                    others: Vec::new(),
+                },
+            )),
         }
     }
 
@@ -1471,8 +1517,8 @@ impl Batch {
         {
             self.updates += self.refreshes.len();
         }
-        for (shadow, from, to) in self.refreshes.drain(..) {
-            refresh_shadow(&shadow, from, to);
+        for (shadow, ranges) in self.refreshes.drain(..) {
+            ranges.flush(&shadow);
         }
     }
 }
@@ -2675,6 +2721,47 @@ mod tests {
     }
 
     #[test]
+    fn disjoint_refreshes_preserve_the_gap_until_it_is_requested() {
+        let Some(_) = super::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        const LEN: usize = 4 * crate::watch::PAGE;
+        const MIDDLE: usize = LEN / 2;
+        let memory = crate::resource::Memory::zeroed(LEN as u64, 64 << 10).unwrap();
+        let address = memory.address() as usize;
+        crate::shadow::register(address, memory.address(), LEN as u64);
+        let shadow = crate::shadow::find(memory.address(), LEN as u64).unwrap();
+        let mut mapping = std::ptr::null_mut();
+        // SAFETY: both allocations cover LEN bytes and no GPU work is in flight.
+        let data = unsafe {
+            shadow.buffer.Map(0, None, Some(&mut mapping)).unwrap();
+            let data = mapping.cast::<u8>();
+            data.add(MIDDLE).write(0xc7);
+            (address as *mut u8).write(0x77);
+            ((address + MIDDLE) as *mut u8).write(0x39);
+            ((address + LEN - 1) as *mut u8).write(0xd5);
+            data
+        };
+        let mut batch = Batch::default();
+        batch.add(&shadow, address + LEN - 64, 64);
+        batch.add(&shadow, address, 64);
+        batch.flush();
+        // SAFETY: these offsets are inside the two live allocations.
+        let after = unsafe { [data.read(), data.add(MIDDLE).read(), data.add(LEN - 1).read()] };
+        batch.add(&shadow, address + MIDDLE, 1);
+        batch.gpu_write(&shadow, address + MIDDLE, 1);
+        // SAFETY: the declaration flushes its shadow before snapshotting.
+        let later = unsafe { data.add(MIDDLE).read() };
+        assert_eq!(shadow.copy_back(address + MIDDLE, 1), 0);
+        // SAFETY: balances the test's Map after its last read.
+        unsafe { shadow.buffer.Unmap(0, None) };
+        crate::shadow::unregister(address, memory.address());
+        assert_eq!(after, [0x77, 0xc7, 0xd5]);
+        assert_eq!(later, 0x39);
+    }
+
+    #[test]
     fn gpu_write_flushes_only_its_shadow_until_title_write() {
         let Some(_) = super::host() else {
             assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
@@ -2723,7 +2810,7 @@ mod tests {
         assert_eq!(mapped(&a_shadow), [0xa1; 32]);
         assert_eq!(mapped(&b_shadow), b_initial);
         assert_eq!(batch.refreshes.len(), 1);
-        assert_eq!((batch.refreshes[0].1, batch.refreshes[0].2), (b, b + 32));
+        assert_eq!(batch.refreshes[0].1.first, (b, b + 32));
 
         batch.title_written();
         assert_eq!(batch.updates, 3);
