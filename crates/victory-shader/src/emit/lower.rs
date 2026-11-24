@@ -185,6 +185,10 @@ struct Lower<'a> {
     mask_ok: bool,
     /// Ballots of masks read as data, by low dword: (low, high).
     ballots: HashMap<Value, (V, V)>,
+    /// Masks whose ballot is being built: a mask whose lane bit needs its
+    /// own value as a number (an opaque mask keyed by a dword it shares
+    /// with another) would otherwise recurse until the stack overflows.
+    balloting: HashSet<Value>,
     /// Block writing each value.
     def_block: HashMap<Value, usize>,
     /// IR block being lowered.
@@ -750,6 +754,7 @@ impl<'a> Lower<'a> {
             },
             mask_ok: false,
             ballots: HashMap::new(),
+            balloting: HashSet::new(),
             def_block: p
                 .blocks
                 .iter()
@@ -1293,8 +1298,10 @@ impl<'a> Lower<'a> {
     fn find_input(&self, row: u8, channel: u8) -> Option<(usize, u8)> {
         self.s.inputs.iter().enumerate().find_map(|(id, e)| {
             let r = e.row?;
+            // `then`, not `then_some`: the channel is only past `col` when
+            // the condition holds.
             (r == u32::from(row) && channel >= e.col && channel < e.col + e.cols)
-                .then_some((id, channel - e.col))
+                .then(|| (id, channel - e.col))
         })
     }
 
@@ -1441,7 +1448,12 @@ impl<'a> Lower<'a> {
                     Some(&b) if b == self.cur_ir => self.cur,
                     Some(&b) => self.tail[b].ok_or("a lane mask written after its use")?,
                 };
-                let bit = self.boolean(m, at)?;
+                if !self.balloting.insert(lo) {
+                    return Err("a lane mask whose lanes depend on its own value");
+                }
+                let bit = self.boolean(m, at);
+                self.balloting.remove(&lo);
+                let bit = bit?;
                 let i32t = self.s.t.i32;
                 let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
                 let r = self
@@ -1689,12 +1701,15 @@ impl<'a> Lower<'a> {
     /// `a - floor(a)`, which on the hardware never reaches 1.0: where it
     /// would round to it (a tiny negative `a`), the result is `below_one`,
     /// the largest value under 1.0 in the operation's width. Hosts differ
-    /// here (some give 1.0). NaN stays NaN.
-    fn fract(&mut self, a: V, below_one: f32) -> V {
+    /// here (some give 1.0). Comparing against a `threshold` distinct from
+    /// `below_one` prevents drivers (observed on NVIDIA) from folding
+    /// `r > k ? k : r` into `minNum` (`FMNMX`) and swallowing NaN.
+    fn fract(&mut self, a: V, threshold: f32, below_one: f32) -> V {
         let c = self.cur;
         let r = self.unary(22, a);
+        let limit = self.s.m.f32(threshold.to_bits());
         let k = self.s.m.f32(below_one.to_bits());
-        let over = self.s.m.cmp(c, pred::OGT, r, k);
+        let over = self.s.m.cmp(c, pred::OGE, r, limit);
         self.s.m.select(c, over, k, r)
     }
 
@@ -2788,15 +2803,8 @@ impl<'a> Lower<'a> {
             "s_addc_u32" | "s_subb_u32" => {
                 let (a, b) = (src32(self, 0)?, src32(self, 1)?);
                 let cin = self.scc_in(inst)?;
-                let cin32 = self.s.m.cast(c, Cast::ZExt, cin, self.s.t.i32);
-                let op = if name == "s_addc_u32" {
-                    Bin::Add
-                } else {
-                    Bin::Sub
-                };
-                let t = self.s.m.bin(c, op, a, b);
-                let r = self.s.m.bin(c, op, t, cin32);
-                (r, None)
+                let (r, carry) = self.add_sub_carry(c, name == "s_addc_u32", a, b, Some(cin));
+                (r, Some(carry))
             }
             "s_mul_i32" | "s_mulk_i32" => {
                 let a = src32(self, 0)?;
@@ -2945,6 +2953,31 @@ impl<'a> Lower<'a> {
             self.vals.insert(scc, val);
         }
         Ok(())
+    }
+
+    /// `a + b (+ cin)` or `a - b (- cin)` with the carry (borrow) out, as the
+    /// scalar and vector add-with-carry instructions set it.
+    fn add_sub_carry(&mut self, c: usize, add: bool, a: V, b: V, cin: Option<V>) -> (V, V) {
+        let op = if add { Bin::Add } else { Bin::Sub };
+        let mut r = self.s.m.bin(c, op, a, b);
+        // Without a carry in: a + b wraps below a; a - b borrows when a < b.
+        let mut carry = if add {
+            self.s.m.cmp(c, pred::IULT, r, a)
+        } else {
+            self.s.m.cmp(c, pred::IULT, a, b)
+        };
+        if let Some(cin) = cin {
+            let one = self.s.m.cast(c, Cast::ZExt, cin, self.s.t.i32);
+            let t = r;
+            r = self.s.m.bin(c, op, t, one);
+            // The carry in carries on when the partial result is all ones
+            // (add) or zero (sub).
+            let edge = self.s.m.i32(if add { u32::MAX } else { 0 });
+            let at_edge = self.s.m.cmp(c, pred::EQ, t, edge);
+            let more = self.s.m.bin(c, Bin::And, cin, at_edge);
+            carry = self.s.m.bin(c, Bin::Or, carry, more);
+        }
+        (r, carry)
     }
 
     fn scc_in(&mut self, inst: &Inst) -> Result<V, Why> {
@@ -4007,7 +4040,7 @@ impl<'a> Lower<'a> {
                 };
                 let r = match op {
                     12 | 13 => self.trig_turns(a, op == 12),
-                    22 => self.fract(a, f32::from_bits(0x3F7F_FFFF)),
+                    22 => self.fract(a, 1.0, f32::from_bits(0x3F7F_FFFF)),
                     _ => self.unary(op, a),
                 };
                 float(self, r)
@@ -4196,26 +4229,7 @@ impl<'a> Lower<'a> {
                 } else {
                     None
                 };
-                let add = name.starts_with("v_add");
-                let op = if add { Bin::Add } else { Bin::Sub };
-                let mut r = self.s.m.bin(c, op, a, bb);
-                // Without a carry in: a + b wraps below a; a - b borrows when a < b.
-                let mut carry = if add {
-                    self.s.m.cmp(c, pred::IULT, r, a)
-                } else {
-                    self.s.m.cmp(c, pred::IULT, a, bb)
-                };
-                if let Some(cin) = cin {
-                    let one = self.s.m.cast(c, Cast::ZExt, cin, self.s.t.i32);
-                    let t = r;
-                    r = self.s.m.bin(c, op, t, one);
-                    // The carry in carries on when the partial result is all
-                    // ones (add) or zero (sub).
-                    let edge = self.s.m.i32(if add { u32::MAX } else { 0 });
-                    let at_edge = self.s.m.cmp(c, pred::EQ, t, edge);
-                    let more = self.s.m.bin(c, Bin::And, cin, at_edge);
-                    carry = self.s.m.bin(c, Bin::Or, carry, more);
-                }
+                let (r, carry) = self.add_sub_carry(c, name.starts_with("v_add"), a, bb, cin);
                 int(self, r)?;
                 if let Some(Operand::Scalar { code, .. }) = v.carry
                     && let Some(w) = inst.write(Reg::S(code))
@@ -4619,8 +4633,8 @@ impl<'a> Lower<'a> {
                     };
                     match op {
                         12 | 13 => self.trig_turns(a, op == 12),
-                        // 0x3bff as a half: 1 - 2^-11.
-                        22 => self.fract(a, 1.0 - 1.0 / 2048.0),
+                        // Any f16 in (-2^-11, 0) has fract >= 1 - 2^-12; clamp to 0x3bff (1 - 2^-11).
+                        22 => self.fract(a, 1.0 - 1.0 / 4096.0, 1.0 - 1.0 / 2048.0),
                         _ => self.unary(op, a),
                     }
                 }
@@ -6835,7 +6849,76 @@ impl<'a> Lower<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Numeric, buffer_format};
+    use super::{Numeric, Parts, buffer_format, lower};
+    use crate::native::{ComputeIo, HwStage, NativeProgram, StageIo};
+    use crate::{io, ir, resource, structure};
+
+    const S_ENDPGM: u32 = 0xBF81_0000;
+
+    /// Lowers a compute program of constants: whether it translates.
+    fn lowers(words: &[u32]) -> Result<(), crate::ShaderError> {
+        let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let native = NativeProgram {
+            stage: HwStage::Cs,
+            wave64: false,
+            vgprs: 256,
+            layout: vec![],
+            used: vec![],
+            io: StageIo::Cs(ComputeIo {
+                rsrc2: 0,
+                threads: [1, 1, 1],
+            }),
+            code,
+        };
+        let p = ir::build(&native.code, false, 256).unwrap();
+        let res = resource::track(&p, &native.layout, native.stage).unwrap();
+        let io = io::raise(&p, &native).unwrap();
+        let st = structure::structure(&p).unwrap();
+        lower(&Parts {
+            native: &native,
+            p: &p,
+            st: &st,
+            io: &io,
+            res: &res,
+            inputs: vec![],
+            outputs: vec![],
+            prims: vec![],
+            mesh_stride: 0,
+        })
+        .map(|_| ())
+    }
+
+    #[test]
+    fn a_scalar_carry_chain_reaches_the_select() {
+        // The high dword of a 64-bit add or subtract, then a select on the
+        // carry (borrow) the high half leaves in SCC, and a branch on it
+        // (only code with an effect needs its operands).
+        let add = [
+            0xBE80_03C1, // s_mov_b32 s0, -1
+            0xBE81_0380, // s_mov_b32 s1, 0
+            0x8000_8100, // s_add_u32 s0, s0, 1
+            0x8201_8001, // s_addc_u32 s1, s1, 0
+            0x8502_0001, // s_cselect_b32 s2, s1, s0
+            0xBF07_8002, // s_cmp_lg_u32 s2, 0
+            0xBF85_0001, // s_cbranch_scc1 -> s_endpgm
+            0xBE83_0380, // s_mov_b32 s3, 0
+            S_ENDPGM,
+        ];
+        let sub = [
+            0xBE80_0380, // s_mov_b32 s0, 0
+            0xBE81_0380, // s_mov_b32 s1, 0
+            0x8080_8100, // s_sub_u32 s0, s0, 1
+            0x8281_8001, // s_subb_u32 s1, s1, 0
+            0x8502_0001, // s_cselect_b32 s2, s1, s0
+            0xBF07_8002, // s_cmp_lg_u32 s2, 0
+            0xBF85_0001, // s_cbranch_scc1 -> s_endpgm
+            0xBE83_0380, // s_mov_b32 s3, 0
+            S_ENDPGM,
+        ];
+        for words in [add, sub] {
+            lowers(&words).unwrap();
+        }
+    }
 
     #[test]
     fn buffer_formats_by_number() {
