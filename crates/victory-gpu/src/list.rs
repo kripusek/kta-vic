@@ -490,6 +490,9 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             if crate::resource::transfer_format(src, dst, None).is_none() {
                 return;
             }
+            if crate::texture::title_written(from) {
+                crate::texture::upload(list, src, from);
+            }
             ensure_state(list, dst, COPY_DEST);
             ensure_state(list, src, COPY_SOURCE);
             crate::texture::host_written(dst);
