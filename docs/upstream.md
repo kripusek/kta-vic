@@ -14,6 +14,10 @@ We also tested upstream's wave-size changes against four compute pipelines that 
 
 Two 2560×1440 packed render targets failed to allocate on the same machine. Henrique Bueno's format fallback let the RTX create both in RGBA8 in a native resource test. Causeway also checks copy and resolve compatibility before recording GPU commands. Copies that require conversion between packed guest texels and RGBA8 are still unsupported. [Upstream PR 89](https://github.com/Marvisak/VIctory/pull/89)
 
+Two later upstream changes reduce work during loading and rendering. DirectStorage writes contiguous physical pages through a single mapped view. Lists submitted together share one staging check for each sampled texture until a CPU write invalidates it. [Physical-page writes](https://github.com/Marvisak/VIctory/pull/61) · [Texture staging](https://github.com/Marvisak/VIctory/pull/79)
+
+We tested shader changes against 50 of the 81 distinct shader hashes rejected during the last RTX 3060 Ti story run. The previous release created zero pipelines from this sample. Six pixel shaders passed Microsoft's DXIL validator and created D3D12 pipelines after adding 64-bit texture atomics. Three more passed after adding clamped gradient sampling on cube maps. Each pipeline used the translator's generated vertex shader. This offline test measured pipeline creation. Visual output and story frame time still need an in-game comparison. [64-bit texture atomics](https://github.com/Marvisak/VIctory/pull/48) · [Clamped sampling](https://github.com/Marvisak/VIctory/pull/73) · [Windows cube-map results](https://github.com/Marvisak/VIctory/pull/138#issuecomment-7118644304)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.
