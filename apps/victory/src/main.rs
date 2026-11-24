@@ -102,8 +102,11 @@ enum Command {
         /// Disable host pass-through (everything must be implemented by us).
         #[arg(long)]
         strict: bool,
-        /// Actually start the title. Without it, stop after binding.
+        /// Stop after binding instead of executing the title.
         #[arg(long)]
+        no_execute: bool,
+        /// Actually start the title (enabled by default).
+        #[arg(long, default_value_t = true)]
         execute: bool,
         /// The console model the title sees (device type, memory).
         #[arg(long, value_enum, default_value_t = Console::SeriesX)]
@@ -176,6 +179,7 @@ fn main() -> Result<()> {
             unimplemented,
             strict,
             execute,
+            no_execute,
             console,
             fps,
             output_height,
@@ -185,7 +189,7 @@ fn main() -> Result<()> {
             &exe,
             unimplemented,
             strict,
-            execute,
+            execute && !no_execute,
             console,
             fps,
             output_height,

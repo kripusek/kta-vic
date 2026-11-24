@@ -176,7 +176,11 @@ pub(crate) extern "system" fn wait(
     let origin = kind == ORIGIN;
     let (tick, wait) = next_tick(kind);
     let limit = Duration::from_millis(u64::from(timeout_ms));
-    let hr = if wait > limit {
+    let is_unlocked = std::env::var_os("VICTORY_UNLOCK_FPS").is_some();
+    let hr = if is_unlocked {
+        last(kind).fetch_max(tick, Ordering::Relaxed);
+        S_OK
+    } else if wait > limit {
         std::thread::sleep(limit);
         TIMEOUT
     } else {

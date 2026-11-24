@@ -374,10 +374,11 @@ pub(crate) fn dred_on() -> bool {
 /// Whether each list of a submission runs and is timed on its own, slow
 /// ones logged with their commands (`VICTORY_GPU_TIMING`, diagnostics
 /// builds; the commands are noted with `VICTORY_D3D12_DRED` on).
-#[cfg(feature = "diagnostics")]
 fn timing() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_GPU_TIMING").is_some())
+    *ON.get_or_init(|| {
+        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_GPU_TIMING").is_some()
+    })
 }
 
 /// Names a host object for the device-removed report, which names the
@@ -615,25 +616,25 @@ impl Host {
         batch.flush();
         let retired = take_retired();
         let prepared = std::time::Instant::now();
-        // Diagnostics: each list on its own, timed (`VICTORY_GPU_TIMING`).
-        #[cfg(feature = "diagnostics")]
-        let groups: Vec<&[Option<ID3D12CommandList>]> = if timing() {
-            firsts
-                .iter()
-                .zip(firsts.iter().skip(1).chain([&lists.len()]))
-                .map(|(&a, &b)| &lists[a..b])
-                .collect()
-        } else {
-            vec![&lists[..]]
-        };
-        #[cfg(not(feature = "diagnostics"))]
-        let groups = [&lists[..]];
+        // Split command lists per-run so no single ExecuteCommandLists call
+        // overwhelms the host driver scheduler. Only wait on the final submission
+        // unless timing() is enabled.
+        let groups: Vec<&[Option<ID3D12CommandList>]> = firsts
+            .iter()
+            .zip(firsts.iter().skip(1).chain([&lists.len()]))
+            .map(|(&a, &b)| &lists[a..b])
+            .collect();
+        let each = timing();
         for (i, group) in groups.iter().enumerate() {
-            *submitted += 1;
             let started = std::time::Instant::now();
+            // SAFETY: closed lists.
+            unsafe { self.queue.ExecuteCommandLists(group) };
+            if !each && i + 1 < groups.len() {
+                continue;
+            }
+            *submitted += 1;
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
-                self.queue.ExecuteCommandLists(group);
                 if let Err(e) = self.queue.Signal(&self.fence, *submitted) {
                     fail(format_args!("could not signal host submission fence: {e}"));
                 }
@@ -648,7 +649,7 @@ impl Host {
                 }
             }
             #[cfg(feature = "diagnostics")]
-            if groups.len() > 1 && started.elapsed() > std::time::Duration::from_millis(50) {
+            if each && started.elapsed() > std::time::Duration::from_millis(50) {
                 // SAFETY: a plain query.
                 let frequency = unsafe { self.queue.GetTimestampFrequency() }.unwrap_or(1);
                 let commands = runs[i].notes.lock().unwrap_or_else(|e| e.into_inner()).len();
@@ -2630,7 +2631,7 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
             bottom: height as i32,
         };
         AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW, false)?;
-        CreateWindowExW(
+        let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
             w!("VI Causeway"),
@@ -2643,7 +2644,11 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
             None,
             Some(instance.into()),
             None,
-        )
+        )?;
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        Ok(hwnd)
     }
 }
 

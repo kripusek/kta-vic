@@ -295,6 +295,16 @@ enum Spill {
 // shortcut: a genuine loop of more iterations than this is cut short too.
 const LOOP_LIMIT: u32 = 1 << 20;
 
+fn loop_limit() -> u32 {
+    static LIMIT: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var("VICTORY_SHADER_LOOP_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(LOOP_LIMIT)
+    })
+}
+
 /// Lane masks read as numbers (`s_bcnt1`, `s_ff1`, `v_mbcnt`, scalar
 /// compares, bit tests) are ballots of the lanes' booleans, taken where the
 /// mask is written: structurisation's `active` masks hold only lanes that
@@ -8506,7 +8516,7 @@ impl<'a> Lower<'a> {
         let (phi, _) = self.counters[&to];
         let one = self.s.m.i32(1);
         let next = self.s.m.bin(c, Bin::Add, phi, one);
-        let limit = self.s.m.i32(LOOP_LIMIT);
+        let limit = self.s.m.i32(loop_limit());
         self.counters
             .get_mut(&to)
             .expect("header")
