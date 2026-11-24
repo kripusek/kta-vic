@@ -5,7 +5,7 @@
 //! writes it (view creation and descriptor copies) and again when a draw
 //! reads it through a table and finds the slot changed.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -32,6 +32,19 @@ pub(crate) struct HostHeap {
     /// Where the search for free dynamic slots starts, and which are taken
     /// (by lists not yet reset).
     slots: Mutex<DynamicSlots>,
+}
+
+/// A recorded table's slots in the heap that allocated them.
+pub(crate) struct DynamicRange {
+    heap: Arc<HostHeap>,
+    pub(crate) first: u32,
+    count: u32,
+}
+
+impl Drop for DynamicRange {
+    fn drop(&mut self) {
+        self.heap.release(self.first, self.count);
+    }
 }
 
 impl Drop for HostHeap {
@@ -269,7 +282,7 @@ fn null_sampler(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 impl HostHeap {
     /// `n` consecutive free dynamic slots (view heaps only), taken until
     /// [`HostHeap::release`]: the first's index.
-    pub(crate) fn dynamic(&self, n: u32) -> Option<u32> {
+    fn dynamic(&self, n: u32) -> Option<u32> {
         if self.sampler || n == 0 || n > self.dynamic {
             return None;
         }
@@ -289,11 +302,16 @@ impl HostHeap {
         self.count
     }
 
-    /// Gives back `n` dynamic slots from `first` (an index [`dynamic`]
-    /// returned).
+    /// Holds dynamic slots until the recording list resets or releases.
+    pub(crate) fn reserve_dynamic(self: &Arc<Self>, count: u32) -> Option<DynamicRange> {
+        let first = self.dynamic(count)?;
+        Some(DynamicRange { heap: self.clone(), first, count })
+    }
+
+    /// Gives back `n` dynamic slots from `first` (an index [`dynamic`] returned).
     ///
     /// [`dynamic`]: HostHeap::dynamic
-    pub(crate) fn release(&self, first: u32, n: u32) {
+    fn release(&self, first: u32, n: u32) {
         let Some(at) = first.checked_sub(self.count) else {
             return;
         };
@@ -1005,5 +1023,28 @@ mod tests {
         heap.release(a, 50);
         assert_eq!(heap.dynamic(50), Some(4));
         assert_eq!(heap.dynamic(40), Some(4 + DYNAMIC - 40));
+    }
+
+    #[test]
+    fn dynamic_range_returns_slots_to_its_own_heap() {
+        let Some(old) = HostHeap::new(false, 4).map(Arc::new) else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let replacement = Arc::new(HostHeap::new(false, 4).unwrap());
+        let first = old.reserve_dynamic(DYNAMIC).unwrap();
+        let second = replacement.reserve_dynamic(DYNAMIC).unwrap();
+        assert_eq!(first.first, second.first);
+        assert!(old.reserve_dynamic(1).is_none());
+        assert!(replacement.reserve_dynamic(1).is_none());
+
+        drop(first);
+        assert!(old.reserve_dynamic(DYNAMIC).is_some());
+        assert!(replacement.reserve_dynamic(1).is_none());
+        let owner = Arc::downgrade(&replacement);
+        drop(replacement);
+        assert_eq!(owner.strong_count(), 1);
+        drop(second);
+        assert_eq!(owner.strong_count(), 0);
     }
 }

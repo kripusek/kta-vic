@@ -298,9 +298,14 @@ pub(crate) struct Barrier {
 /// The barrier on host resources, or `None` if it names a resource the host
 /// GPU does not have (buffers so far).
 #[cfg(windows)]
-fn host_barrier(b: &Barrier) -> Option<Barrier> {
+fn host_barrier(list: &crate::host::HostList, b: &Barrier) -> Option<Barrier> {
     use windows::core::Interface;
-    let host = |r: This| crate::resource::host_resource(r).map(|h| h.as_raw().cast_const().cast());
+    let host = |r: This| {
+        let texture = crate::resource::host_copy(r)?;
+        let resource: This = texture.texture.as_raw().cast_const().cast();
+        list.keep_barrier_texture(texture);
+        Some(resource)
+    };
     match b.kind {
         1 => Some(Barrier {
             first: if b.first.is_null() {
@@ -368,7 +373,7 @@ extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> 
                         },
                     );
                 }
-            } else if let Some(b) = host_barrier(b) {
+            } else if let Some(b) = host_barrier(list, b) {
                 host.push(b);
             }
         }
