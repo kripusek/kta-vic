@@ -3477,15 +3477,18 @@ impl<'a> Lower<'a> {
         data: &[Operand],
         guard: Option<V>,
     ) -> Result<(), Why> {
-        use super::bitcode::Rmw;
         let c = self.cur;
         let k = |l: &mut Self, v: u32| l.s.m.i32(v);
-        // shortcut: as for dwords, in bounds; a halfword is taken as
-        // 2-aligned (the bytes never straddle two dwords).
         let o = k(self, offset);
         let at = self.s.m.bin(c, Bin::Add, a, o);
+        // Keep every byte of the access inside guest LDS. The host array can
+        // also hold private scratch for wave emulation after the guest region.
+        let last = self.s.m.i32(self.title_lds_dwords * 4 - sub.bits / 8);
+        let valid = self.s.m.cmp(c, pred::IULE, at, last);
+        let zero = k(self, 0);
+        let safe = self.s.m.select(c, valid, at, zero);
         let two = k(self, 2);
-        let index = self.s.m.bin(c, Bin::LShr, at, two);
+        let index = self.s.m.bin(c, Bin::LShr, safe, two);
         let lds = self.s.lds();
         let p = self.s.m.element(c, lds, index);
         let three = k(self, 3);
@@ -3503,6 +3506,7 @@ impl<'a> Lower<'a> {
             } else {
                 self.s.m.bin(c, Bin::And, x, mask)
             };
+            let x = self.s.m.select(c, valid, x, zero);
             let x = match sub.d16 {
                 None => x,
                 Some(high) => {
@@ -3537,14 +3541,23 @@ impl<'a> Lower<'a> {
         let bits = self.s.m.bin(c, Bin::Shl, mask, shift);
         let ones = k(self, !0);
         let clear = self.s.m.bin(c, Bin::Xor, bits, ones);
-        // Lanes write other bytes of the same dword at the same time, so
-        // the bytes go in atomically: cleared, then set. shortcut: lanes
-        // writing the same bytes at once leave both values or-ed together
-        // where the console keeps one of them.
-        let at = self.begin_guarded(guard);
-        self.s.m.atomic(self.cur, Rmw::And, p, clear);
-        self.s.m.atomic(self.cur, Rmw::Or, p, set);
-        self.end_guarded(at, &[]);
+        let active = guard.map_or(valid, |g| self.s.m.bin(c, Bin::And, valid, g));
+        let guarded = self.begin_guarded(Some(active));
+        let entry = self.cur;
+        let retry = self.s.m.new_block();
+        let done = self.s.m.new_block();
+        self.s.m.terminate(entry, Term::Br(retry));
+        // Replace the field atomically. A competing write supplies the next
+        // expected dword, including the latest values of neighboring fields.
+        let expected = self.s.m.phi(retry, self.s.t.i32);
+        let other_bits = self.s.m.bin(retry, Bin::And, expected, clear);
+        let replacement = self.s.m.bin(retry, Bin::Or, other_bits, set);
+        let observed = self.s.m.cmpxchg(retry, p, expected, replacement);
+        self.s.m.set_phi(expected, vec![(zero, entry), (observed, retry)]);
+        let stored = self.s.m.cmp(retry, pred::EQ, observed, expected);
+        self.s.m.terminate(retry, Term::CondBr(stored, done, retry));
+        self.cur = done;
+        self.end_guarded(guarded, &[]);
         Ok(())
     }
 
@@ -4402,8 +4415,7 @@ impl<'a> Lower<'a> {
     }
 
     /// Two scalar loads of the same dwords: same opcode and immediate
-    /// offset, base read from the same values, and the same or an
-    /// equivalent register offset.
+    /// offset, base read from the same values, and the same register offset.
     fn twin_loads(&self, a: Site, b: Site) -> bool {
         let (ia, ib): (&Inst, &Inst) = (
             &self.x.p.blocks[a.0].insts[a.1],
@@ -4434,7 +4446,7 @@ impl<'a> Lower<'a> {
             (Operand::Scalar { code: NULL, .. }, Operand::Scalar { code: NULL, .. }) => true,
             (Operand::Scalar { code: ca, .. }, Operand::Scalar { code: cb, .. }) => {
                 match (ia.read(Reg::S(*ca)), ib.read(Reg::S(*cb))) {
-                    (Some(x), Some(y)) => self.same_scalar(x, y),
+                    (Some(x), Some(y)) => self.same_descriptor_offset(x, y),
                     _ => false,
                 }
             }
@@ -4443,24 +4455,34 @@ impl<'a> Lower<'a> {
         ia.name() == ib.name() && oa == ob && same_base && same_soffset
     }
 
-    /// The same value, or two `v_readfirstlane_b32` of the same VGPR value
-    /// (each waterfall loop reads the index anew).
-    fn same_scalar(&self, x: Value, y: Value) -> bool {
-        if x == y {
+    fn same_descriptor_offset(&self, a: Value, b: Value) -> bool {
+        if a == b {
             return true;
         }
-        let first_lane_of = |v: Value| {
-            self.x.p.blocks[*self.def_block.get(&v)?].insts.iter()
-                .find(|i| i.writes.iter().any(|w| w.1 == v))
-                .filter(|i| i.name() == "v_readfirstlane_b32")
-                .and_then(|i| {
-                    i.reads
-                        .iter()
-                        .find(|r| matches!(r.0, Reg::V(_)))
-                        .map(|r| r.1)
-                })
+        let first_lane = |offset| {
+            let block = *self.def_block.get(&offset)?;
+            let (pos, inst) = self.x.p.blocks[block].insts.iter().enumerate()
+                .find(|(_, inst)| inst.writes.iter().any(|&(_, v)| v == offset))?;
+            if inst.name() != "v_readfirstlane_b32" {
+                return None;
+            }
+            let source = inst.reads.iter().find(|(r, _)| matches!(r, Reg::V(_)))?.1;
+            Some((block, pos, source))
         };
-        matches!((first_lane_of(x), first_lane_of(y)), (Some(a), Some(b)) if a == b)
+        let (Some((ba, ia, va)), Some((bb, ib, vb))) = (first_lane(a), first_lane(b)) else {
+            return false;
+        };
+        if va != vb {
+            return false;
+        }
+        // A uniform VGPR gives the same value regardless of the selected lane.
+        if self.val_uniform.get(va.0 as usize) == Some(&true) {
+            return true;
+        }
+        // In one basic block both reads execute in sequence. With no intervening
+        // EXEC write, both select the same first lane of the same VGPR value.
+        ba == bb && self.x.p.blocks[ba].insts[ia.min(ib)..ia.max(ib)].iter().all(|inst|
+            inst.write(Reg::S(EXEC)).is_none() && inst.write(Reg::S(EXEC + 1)).is_none())
     }
 
     /// A descriptor load (`s_load_dword*` from a table or heap) whose dwords
@@ -7353,7 +7375,7 @@ impl<'a> Lower<'a> {
                 fu
             };
             match op {
-                60 | 61 if self.s.threads.is_some() => {
+                60 | 61 if self.s.threads.is_some() && self.s.mesh.is_none() => {
                     self.cross_lane(true)?;
                     if self.wave64 == Wave64Mode::Emulate {
                         return Err("quad gradients without a native wave layout");

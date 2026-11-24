@@ -434,3 +434,47 @@ fn opcodes() {
         assert_eq!(inst.name(), Some(name));
     }
 }
+
+/// Contending lanes must leave one complete byte, preserving the other fields.
+#[test]
+fn simultaneous_subword_stores_leave_a_value_written_by_one_lane() {
+    let mut body = vec![v_mov_b32(7, int(0))];
+    body.extend(ds(DS_WRITE_B32, 0, 7, 1, 0));
+    body.push(S_WAITCNT_0);
+    body.push(S_BARRIER);
+    body.push(v_and_b32(8, int(1), 0));
+    body.push(v_lshlrev_b32(10, vgpr(8), 2));
+    body.extend(ds(0x1e, 0, 7, 10, 0));
+    body.push(S_WAITCNT_0);
+    body.push(S_BARRIER);
+    body.extend(ds(DS_READ_B32, 5, 7, 0, 0));
+    body.push(S_WAITCNT_0);
+    let shader = build_cs(&body, LANES);
+    for (label, host) in hosts() {
+        let out = run(label, &host, &shader, [0xabbaccff, 1, 0, 0], LANES);
+        assert!(out.iter().all(|&x| x == 0xabbacc01 || x == 0xabbacc02), "{out:x?}");
+    }
+}
+
+/// Check the last valid access, an access at the end, and a halfword whose
+/// first byte is inside guest LDS but whose second byte would be outside.
+#[test]
+fn subword_accesses_respect_the_guest_lds_boundary() {
+    for (store, load, cases) in [
+        (0x1e, 0x3a, [(511, 0x76), (512, 0), (u32::MAX, 0)]),
+        (0x1f, 0x3c, [(510, 0x9876), (511, 0), (512, 0)]),
+    ] {
+        let mut body = ds(store, 0, 1, 2, 0).to_vec();
+        body.push(S_WAITCNT_0);
+        body.push(S_BARRIER);
+        body.extend(ds(load, 5, 1, 0, 0));
+        body.push(S_WAITCNT_0);
+        let shader = build_cs(&body, LANES);
+        for (label, host) in hosts() {
+            for (addr, expected) in cases {
+                assert_eq!(run(label, &host, &shader, [addr, 0x9876, 0, 0], LANES),
+                    vec![expected; LANES as usize], "address {addr}");
+            }
+        }
+    }
+}
