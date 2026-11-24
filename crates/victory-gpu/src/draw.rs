@@ -64,7 +64,7 @@ pub(crate) struct State {
     vertex: [VertexView; 32],
     index: IndexView,
     /// Bound render target and depth resources, for their host states.
-    targets: Vec<usize>,
+    targets: Vec<(usize, Option<std::ops::Range<u32>>)>,
     depth: usize,
     /// The title's primitive topology (the host's may differ).
     topology: u32,
@@ -268,10 +268,14 @@ impl State {
             let Some(texture) = crate::resource::host_resource(record.resource) else {
                 continue;
             };
-            self.targets.push(record.resource as usize);
+            let desc = record.desc();
+            self.targets.push((
+                record.resource as usize,
+                crate::descriptor::rtv_mips(texture, desc.as_ref()),
+            ));
             #[cfg(feature = "diagnostics")]
             crate::capture::note_target(record.resource);
-            rtvs.push(host.rtv(Some(texture), record.desc().as_ref()));
+            rtvs.push(host.rtv(Some(texture), desc.as_ref()));
         }
         self.depth = 0;
         let dsv = crate::descriptor::dsv_record(depth).and_then(|record| {
@@ -391,8 +395,8 @@ impl State {
         }
         const RENDER_TARGET: u32 = 0x4;
         const DEPTH_WRITE: u32 = 0x10;
-        for &t in &self.targets {
-            crate::list::ensure_state(list, t as This, RENDER_TARGET);
+        for (resource, mips) in &self.targets {
+            crate::list::ensure_mips(list, *resource as This, RENDER_TARGET, mips.clone());
         }
         if self.depth != 0 {
             crate::list::ensure_state(list, self.depth as This, DEPTH_WRITE);
@@ -754,7 +758,7 @@ impl State {
         let targets: Vec<String> = self
             .targets
             .iter()
-            .filter_map(|&t| crate::resource::host_resource(t as This))
+            .filter_map(|&(resource, _)| crate::resource::host_resource(resource as This))
             .map(|t| {
                 // SAFETY: a live resource.
                 let d = unsafe { t.GetDesc() };
@@ -1090,15 +1094,17 @@ fn readable(list: &HostList, u: &UsedResource, view: &View) {
         }
     }
     match (view, u.kind) {
-        (View::Shader(resource, _), ResourceType::Srv) => {
-            if let Some(t) = crate::resource::host_resource(*resource as This)
-                && crate::texture::title_written(t)
-            {
+        (View::Shader(resource, desc), ResourceType::Srv) => {
+            let Some(t) = crate::resource::host_resource(*resource as This) else {
+                return;
+            };
+            if crate::texture::title_written(t) {
                 crate::texture::upload(list, *resource as This, t);
             }
-            crate::list::ensure_state(list, *resource as This, SHADER_RESOURCE);
+            let mips = desc.as_ref().and_then(|d| crate::descriptor::host::srv_mips(t, d));
+            crate::list::ensure_mips(list, *resource as This, SHADER_RESOURCE, mips);
             #[cfg(feature = "diagnostics")]
-            if let Some(t) = crate::resource::host_resource(*resource as This) {
+            {
                 // SAFETY: a live resource.
                 let d = unsafe { t.GetDesc() };
                 if d.Flags.0 & 7 == 0 {
@@ -1187,44 +1193,25 @@ pub(crate) fn stencil_ref(list: &HostList, reference: u32) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn typed_null_rtv_keeps_the_next_color_slot() {
-        use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-        use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
-        use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
-        };
-        use windows::core::s;
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::core::s;
 
-        struct Texture(This);
+    struct Texture(This);
 
-        impl Drop for Texture {
-            fn drop(&mut self) {
-                let release = crate::object::slot::<extern "system" fn(This) -> u32>(self.0, 0x10);
-                release(self.0);
-            }
+    impl Drop for Texture {
+        fn drop(&mut self) {
+            let release = crate::object::slot::<extern "system" fn(This) -> u32>(self.0, 0x10);
+            release(self.0);
         }
+    }
 
-        let Some(host) = crate::host::host() else {
-            return; // no host GPU here
-        };
-        let device = &host.device;
-        let list = host.new_list().expect("host command list");
-        let l = &list.list;
-        let format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        let source = r#"
-            [RootSignature("RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)")]
-            float4 vs(uint id : SV_VertexID) : SV_Position {
-                return float4(id == 2 ? 3 : -1, id == 1 ? -3 : 1, 0, 1);
-            }
-            struct Colors { float4 red : SV_Target0; float4 green : SV_Target1; };
-            Colors ps() {
-                Colors c;
-                c.red = float4(1, 0, 0, 1);
-                c.green = float4(0, 1, 0, 1);
-                return c;
-            }
-        "#;
+    fn graphics_fixture(
+        device: &ID3D12Device,
+        source: &str,
+        formats: &[DXGI_FORMAT],
+    ) -> (ID3D12RootSignature, ID3D12PipelineState) {
         let compile = |entry, target| {
             let mut code = None;
             // SAFETY: source and shader names are live, and code is our output pointer.
@@ -1249,7 +1236,7 @@ mod tests {
         let vs = compile(s!("vs"), s!("vs_5_1"));
         let ps = compile(s!("ps"), s!("ps_5_1"));
         // SAFETY: compiled fixture shaders and their embedded root signature are live.
-        let (root, pso): (ID3D12RootSignature, ID3D12PipelineState) = unsafe {
+        unsafe {
             let bytecode = |blob: &ID3DBlob| D3D12_SHADER_BYTECODE {
                 pShaderBytecode: blob.GetBufferPointer(),
                 BytecodeLength: blob.GetBufferSize(),
@@ -1273,35 +1260,35 @@ mod tests {
                     ..Default::default()
                 },
                 PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-                NumRenderTargets: 2,
+                NumRenderTargets: formats.len() as u32,
                 SampleDesc: DXGI_SAMPLE_DESC {
                     Count: 1,
                     Quality: 0,
                 },
                 ..Default::default()
             };
-            // D3D12 requires UNKNOWN in the PSO slot that binds a null RTV.
-            desc.RTVFormats[1] = format;
+            desc.RTVFormats[..formats.len()].copy_from_slice(formats);
             desc.BlendState.RenderTarget[0].RenderTargetWriteMask =
                 D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
             let pso = device
                 .CreateGraphicsPipelineState(&desc)
                 .expect("graphics pipeline");
             (root, pso)
-        };
+        }
+    }
 
-        const SIDE: u32 = 4;
+    fn color_texture(side: u32, mips: u16) -> Texture {
         let heap = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
             ..Default::default()
         };
         let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: u64::from(SIDE),
-            Height: SIDE,
+            Width: u64::from(side),
+            Height: side,
             DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: format,
+            MipLevels: mips,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -1325,7 +1312,70 @@ mod tests {
             ),
             crate::object::S_OK
         );
-        let _target = Texture(target);
+        Texture(target)
+    }
+
+    fn assert_mip_zero_pixels(
+        host: &crate::host::Host,
+        list: &HostList,
+        target: This,
+        side: u32,
+        expected: [u8; 4],
+    ) {
+        crate::list::ensure_state(list, target, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32);
+        let color = crate::resource::host_resource(target).expect("color target");
+        let (readback, footprint) =
+            crate::capture::read_back(&host.device, &list.list, color).expect("color readback");
+        list.close();
+        assert_eq!(host.execute_checked(&[list]), None);
+        let mut mapped = std::ptr::null_mut();
+        let mut pixels = Vec::new();
+        // SAFETY: execution has completed and all pixels lie in the mapped footprint.
+        unsafe {
+            readback
+                .Map(0, None, Some(&mut mapped))
+                .expect("map readback");
+            for y in 0..side {
+                for x in 0..side {
+                    let at = footprint.Offset as usize
+                        + (y * footprint.Footprint.RowPitch + x * 4) as usize;
+                    pixels.push(mapped.cast::<u8>().add(at).cast::<[u8; 4]>().read());
+                }
+            }
+            readback.Unmap(0, None);
+        }
+        assert_eq!(pixels, vec![expected; (side * side) as usize]);
+    }
+
+    #[test]
+    fn typed_null_rtv_keeps_the_next_color_slot() {
+        let Some(host) = crate::host::host() else {
+            return; // no host GPU here
+        };
+        let device = &host.device;
+        let list = host.new_list().expect("host command list");
+        let l = &list.list;
+        let format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        let source = r#"
+            [RootSignature("RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)")]
+            float4 vs(uint id : SV_VertexID) : SV_Position {
+                return float4(id == 2 ? 3 : -1, id == 1 ? -3 : 1, 0, 1);
+            }
+            struct Colors { float4 red : SV_Target0; float4 green : SV_Target1; };
+            Colors ps() {
+                Colors c;
+                c.red = float4(1, 0, 0, 1);
+                c.green = float4(0, 1, 0, 1);
+                return c;
+            }
+        "#;
+        // D3D12 requires UNKNOWN in the PSO slot that binds a null RTV.
+        let (root, pso) = graphics_fixture(device, source, &[DXGI_FORMAT(0), format]);
+
+        const SIDE: u32 = 4;
+        let fixture = color_texture(SIDE, 1);
+        let target = fixture.0;
+        let null = std::ptr::null();
         let color = crate::resource::host_resource(target).expect("color target");
         let mut slots = [[0u64; 16]; 2];
         let handles = slots.each_mut().map(|slot| slot.as_mut_ptr() as u64);
@@ -1368,27 +1418,142 @@ mod tests {
         // SAFETY: complete graphics state on the open list.
         unsafe { l.DrawInstanced(3, 1, 0, 0) };
 
-        crate::list::ensure_state(&list, target, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32);
-        let (readback, footprint) =
-            crate::capture::read_back(device, l, color).expect("color readback");
-        list.close();
-        assert_eq!(host.execute_checked(&[&list]), None);
-        let mut mapped = std::ptr::null_mut();
-        let mut pixels = Vec::new();
-        // SAFETY: execution has completed and all pixels lie in the mapped footprint.
-        unsafe {
-            readback
-                .Map(0, None, Some(&mut mapped))
-                .expect("map readback");
-            for y in 0..SIDE {
-                for x in 0..SIDE {
-                    let at = footprint.Offset as usize
-                        + (y * footprint.Footprint.RowPitch + x * 4) as usize;
-                    pixels.push(mapped.cast::<u8>().add(at).cast::<[u8; 4]>().read());
+        assert_mip_zero_pixels(host, &list, target, SIDE, [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn array_views_sample_and_render_distinct_color_mips() {
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let device = &host.device;
+        let format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        let (root, pso) = graphics_fixture(
+            device,
+            r#"
+                [RootSignature("RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), DescriptorTable(SRV(t0))")]
+                float4 vs(uint id : SV_VertexID) : SV_Position {
+                    return float4(id == 2 ? 3 : -1, id == 1 ? -3 : 1, 0, 1);
+                }
+                Texture2DArray<float4> image : register(t0);
+                float4 ps() : SV_Target0 { return image.Load(int4(0, 0, 0, 0)).brga; }
+            "#,
+            &[format],
+        );
+        const SIDE: u32 = 4;
+        let fixture = color_texture(SIDE, 2);
+        let target = fixture.0;
+        let color = crate::resource::host_resource(target).expect("color target");
+        let list = host.new_list().unwrap();
+        let l = &list.list;
+        let heap = std::sync::Arc::new(crate::descriptor::host::HostHeap::new(false, 2).unwrap());
+        list.bind_heaps([Some(&heap), None]);
+        let target_state = D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32;
+        crate::list::ensure_state(&list, target, target_state);
+        // SAFETY: these graphics objects and the texture outlive submission.
+        let (heap_start, step) = unsafe {
+            l.ClearRenderTargetView(host.rtv(Some(color), None), &[1.0, 0.0, 0.0, 1.0], None);
+            l.SetGraphicsRootSignature(&root);
+            l.SetPipelineState(&pso);
+            l.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            (
+                heap.heap.GetGPUDescriptorHandleForHeapStart().ptr,
+                u64::from(
+                    device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
+                ),
+            )
+        };
+        let used = UsedResource {
+            kind: ResourceType::Srv,
+            root: RootType::Table,
+            table_offset_dwords: 0,
+            lower_bound: 0,
+            stride: 8,
+            dwords: 8,
+            user_data: 0,
+            slot: 0,
+        };
+        let mut state = State::default();
+        let mut slots = [[0u64; 16]; 2];
+        let handles = slots.each_mut().map(|slot| slot.as_mut_ptr() as u64);
+        for (source, destination, levels) in [(0, 1, 1), (1, 0, u32::MAX)] {
+            let srv = View::Shader(
+                target as usize,
+                Some([
+                    format.0 as u32,
+                    D3D12_SRV_DIMENSION_TEXTURE2DARRAY.0 as u32,
+                    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    0, // Padding before the descriptor union.
+                    source,
+                    levels,
+                    0,
+                    1,
+                    0,
+                    0,
+                ]),
+            );
+            let rtv = [
+                format.0 as u32,
+                D3D12_RTV_DIMENSION_TEXTURE2DARRAY.0 as u32,
+                destination,
+                0,
+                1,
+                0,
+            ];
+            let handle = handles[destination as usize];
+            crate::descriptor::create_rtv(std::ptr::null(), target, &rtv, handle);
+            state.set_targets(&list, &[handle], 0);
+            if source == 0 {
+                // Initialize the destination so dropping either draw fails the readback check.
+                let rtv = crate::descriptor::rtv_record(handle)
+                    .unwrap()
+                    .desc()
+                    .unwrap();
+                // SAFETY: the initial whole-resource render-target state includes mip 1.
+                unsafe {
+                    l.ClearRenderTargetView(
+                        host.rtv(Some(color), Some(&rtv)),
+                        &[0.0, 0.0, 0.0, 1.0],
+                        None,
+                    );
                 }
             }
-            readback.Unmap(0, None);
+            heap.make_at(source, &srv);
+            readable(&list, &used, &srv);
+            for (image, mips) in &state.targets {
+                crate::list::ensure_mips(&list, *image as This, target_state, mips.clone());
+            }
+            let side = SIDE >> destination;
+            viewports(
+                &list,
+                &[D3D12_VIEWPORT {
+                    Width: side as f32,
+                    Height: side as f32,
+                    MaxDepth: 1.0,
+                    ..Default::default()
+                }],
+            );
+            scissors(
+                &list,
+                &[RECT {
+                    right: side as i32,
+                    bottom: side as i32,
+                    ..Default::default()
+                }],
+            );
+            // SAFETY: the target and single SRV view address distinct mips.
+            unsafe {
+                l.SetGraphicsRootDescriptorTable(
+                    0,
+                    D3D12_GPU_DESCRIPTOR_HANDLE {
+                        ptr: heap_start + u64::from(source) * step,
+                    },
+                );
+                l.DrawInstanced(3, 1, 0, 0);
+            }
         }
-        assert_eq!(pixels, [[0, 255, 0, 255]; (SIDE * SIDE) as usize]);
+        // Both draws must run to rotate the source red through green to blue.
+        assert_mip_zero_pixels(host, &list, target, SIDE, [0, 0, 255, 255]);
     }
 }

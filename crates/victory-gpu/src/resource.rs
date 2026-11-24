@@ -894,18 +894,6 @@ impl Drop for HostTexture {
     }
 }
 
-/// Moves the host texture to `wanted` (a host texture state); the host
-/// resource and the state it leaves, if that is a change.
-#[cfg(all(windows, test))]
-pub(crate) fn host_transition(this: This, wanted: u32) -> Option<(*mut c_void, u32)> {
-    use windows::core::Interface;
-    let host = resource(this).host.as_ref()?;
-    let before = host
-        .state
-        .swap(wanted, std::sync::atomic::Ordering::Relaxed);
-    (before != wanted).then(|| (host.texture.as_raw(), before))
-}
-
 /// The host GPU's copy of a title resource, if it has one.
 #[cfg(windows)]
 pub(crate) fn host_resource<'a>(
@@ -2187,6 +2175,104 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn transitions_keep_color_target_mips_independent() {
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let null = std::ptr::null();
+        let desc = ResourceDesc {
+            flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 as u32,
+            ..texture(8, 8, 28, 3)
+        };
+        let target = D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32;
+        let sampled = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE.0 as u32;
+        let copy = D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32;
+        let mut image = null;
+        assert_eq!(
+            create_committed(
+                null,
+                &PROPERTIES,
+                0,
+                &desc,
+                target,
+                null.cast(),
+                &RESOURCE_IIDS[0],
+                &mut image,
+            ),
+            S_OK
+        );
+        let texture = host_resource(image).unwrap();
+        let rtv = |mip, first, count, plane| D3D12_RENDER_TARGET_VIEW_DESC {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2DARRAY,
+            Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+                Texture2DArray: D3D12_TEX2D_ARRAY_RTV {
+                    MipSlice: mip,
+                    FirstArraySlice: first,
+                    ArraySize: count,
+                    PlaneSlice: plane,
+                },
+            },
+        };
+        let rtv_range = |view| crate::descriptor::rtv_mips(texture, Some(&view));
+        let srv_range = |mip, levels, first, count, plane| {
+            crate::descriptor::host::srv_mips(
+                texture,
+                &[
+                    28,
+                    D3D12_SRV_DIMENSION_TEXTURE2DARRAY.0 as u32,
+                    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    0, // Padding before the D3D12 descriptor union.
+                    mip,
+                    levels,
+                    first,
+                    count,
+                    plane,
+                    0,
+                ],
+            )
+        };
+        let rtv_mip1 = rtv_range(rtv(1, 0, 1, 0));
+        let srv_mip0 = srv_range(0, 1, 0, 1, 0);
+        assert_eq!(rtv_mip1, Some(1..2));
+        assert_eq!(srv_mip0, Some(0..1));
+        assert_eq!(srv_range(1, u32::MAX, 0, 1, 0), Some(1..3));
+        assert_eq!(srv_range(0, u32::MAX, 0, 1, 0), None);
+        for (first, count, plane) in [(1, 1, 0), (0, 0, 0), (0, 2, 0), (0, 1, 1)] {
+            assert_eq!(rtv_range(rtv(1, first, count, plane)), None);
+            assert_eq!(srv_range(0, 1, first, count, plane), None);
+        }
+        assert_eq!(rtv_range(rtv(3, 0, 1, 0)), None);
+        for (mip, levels) in [(0, 0), (1, 3), (3, 1), (u32::MAX, u32::MAX)] {
+            assert_eq!(srv_range(mip, levels, 0, 1, 0), None);
+        }
+        let list = host.new_list().unwrap();
+        let changes = |state, mips| {
+            let mut barriers = Vec::new();
+            list.transition(image, state, mips, |_, mip, before, after| {
+                barriers.push((mip, before, after));
+            });
+            barriers
+        };
+        assert!(changes(target, None).is_empty());
+        assert_eq!(changes(sampled, srv_mip0.clone()), [(0, target, sampled)]);
+        assert!(changes(target, rtv_mip1).is_empty());
+        assert!(changes(sampled, srv_mip0).is_empty());
+        assert_eq!(
+            changes(copy, None),
+            [
+                (0, sampled, target),
+                (D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, target, copy),
+            ]
+        );
+        assert_eq!(slot::<extern "system" fn(This) -> u32>(image, 0x10)(image), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn recorded_uav_barrier_retains_the_released_texture() {
         use windows::Win32::Graphics::Direct3D12::{ID3D12CommandAllocator, ID3D12GraphicsCommandList};
         use windows::core::Interface;
@@ -2242,7 +2328,10 @@ mod tests {
         let iid = &RESOURCE_IIDS[0];
         const COPY_DEST: u32 = 0x400;
         let (mut image, mut source) = (null, null);
-        let rgba = texture(4, 4, 28, 1);
+        let rgba = ResourceDesc {
+            flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 as u32,
+            ..texture(4, 4, 28, 2)
+        };
         assert_eq!(
             create_committed(
                 null,
@@ -2336,6 +2425,27 @@ mod tests {
         type Copy =
             extern "system" fn(This, *const Location, u32, u32, u32, *const Location, *const u8);
         slot::<Copy>(list, 0x80)(list, &to, 0, 0, 0, &from, null.cast());
+        // Exercise both states of one texture in the same guest copy.
+        let mip_one = Location {
+            resource: image,
+            kind: 0,
+            footprint: PlacedFootprint { offset: 1, ..rows },
+        };
+        let region = [1u32, 1, 0, 3, 3, 1];
+        slot::<Copy>(list, 0x80)(list, &mip_one, 0, 0, 0, &to, region.as_ptr().cast());
+        #[cfg(feature = "diagnostics")]
+        if let Ok(debug) = crate::list::host_list(list)
+            .unwrap().list.cast::<ID3D12DebugCommandList>()
+        {
+            // SAFETY: the list just recorded a copy between these live subresources.
+            unsafe {
+                let color = host_resource(image).unwrap();
+                let src = D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32;
+                let dst = D3D12_RESOURCE_STATE_COPY_DEST.0 as u32;
+                assert!(debug.AssertResourceState(color, 0, src).as_bool());
+                assert!(debug.AssertResourceState(color, 1, dst).as_bool());
+            }
+        }
         slot::<extern "system" fn(This) -> HRESULT>(list, 0x48)(list);
         slot::<extern "system" fn(This, u32, *const This)>(queue, 0x50)(queue, 1, &list);
 
@@ -2346,7 +2456,7 @@ mod tests {
         };
         let readback_desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: 1024,
+            Width: 1536,
             Height: 1,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -2374,7 +2484,7 @@ mod tests {
         let readback = readback.unwrap();
         let host_image = host_resource(image).unwrap();
         let back = host.new_list().unwrap();
-        let (_, before) = host_transition(image, 0x800).unwrap();
+        crate::list::ensure_state(&back, image, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32);
         // The upload list holds the texture until it is reset.
         assert!(std::sync::Arc::strong_count(&host_copy(image).unwrap()) > 2);
         use windows::core::Interface;
@@ -2390,11 +2500,6 @@ mod tests {
         };
         // SAFETY: an open list, live resources, locations in the host layout.
         unsafe {
-            back.list.ResourceBarrier(&[crate::host::transition(
-                host_image,
-                D3D12_RESOURCE_STATES(before as i32),
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            )]);
             back.list.CopyTextureRegion(
                 (&raw const out_to).cast(),
                 0,
@@ -2403,28 +2508,43 @@ mod tests {
                 (&raw const out_from).cast(),
                 None,
             );
+            let mip_dst = Location {
+                footprint: PlacedFootprint { offset: 1024, width: 2, height: 2, ..rows },
+                ..out_to
+            };
+            let mip_src = Location { footprint: mip_one.footprint, ..out_from };
+            back.list.CopyTextureRegion(
+                (&raw const mip_dst).cast(), 0, 0, 0, (&raw const mip_src).cast(), None,
+            );
         }
         back.close();
-        host.execute(&[&back]);
+        assert_eq!(host.execute_checked(&[&back]), None);
         let mut mapped = std::ptr::null_mut();
-        // SAFETY: the copy finished (execute waits); the buffer is 1024 bytes.
+        // SAFETY: the copy finished (execute waits); the buffer is 1536 bytes.
         let read = unsafe {
             readback
                 .Map(
                     0,
                     Some(&D3D12_RANGE {
                         Begin: 0,
-                        End: 1024,
+                        End: 1536,
                     }),
                     Some(&mut mapped),
                 )
                 .unwrap();
-            std::slice::from_raw_parts(mapped.cast::<u8>(), 1024)
+            std::slice::from_raw_parts(mapped.cast::<u8>(), 1536)
         };
         for row in 0..4 {
             let at = row * 256;
             assert_eq!(read[at..at + 16], bytes[at..at + 16], "row {row}");
         }
+        for y in 0..2 {
+            let dst = 1024 + y * 256;
+            let src = (y + 1) * 256 + 4;
+            assert_eq!(read[dst..dst + 8], bytes[src..src + 8], "mip 1 row {y}");
+        }
+        // SAFETY: both copies have completed and the mapping is no longer used.
+        unsafe { readback.Unmap(0, None) };
     }
 
     #[test]

@@ -307,24 +307,6 @@ fn host_barrier(list: &crate::host::HostList, b: &Barrier) -> Option<Barrier> {
         Some(resource)
     };
     match b.kind {
-        0 => {
-            // A split barrier's first half: its second half transitions.
-            const BEGIN_ONLY: u32 = 1;
-            if b.flags & BEGIN_ONLY != 0 {
-                return None;
-            }
-            // shortcut: whole resources, from the state the list tracked
-            // (`HostList::transition`); subresources are not told apart.
-            let wanted = crate::host::texture_state(b.last as u32);
-            let (texture, before) = list.transition(b.first, wanted)?;
-            Some(Barrier {
-                kind: 0,
-                flags: 0,
-                first: texture.as_raw().cast_const().cast(),
-                second: 0xffff_ffff | (u64::from(before) << 32),
-                last: u64::from(crate::host::legal_state(texture, wanted)),
-            })
-        }
         1 => Some(Barrier {
             first: if b.first.is_null() {
                 b.first
@@ -368,10 +350,33 @@ extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> 
     {
         // SAFETY: the title passes `count` barriers.
         let barriers = unsafe { std::slice::from_raw_parts(barriers, count as usize) };
-        let mut host: Vec<Barrier> = barriers
-            .iter()
-            .filter_map(|b| host_barrier(list, b))
-            .collect();
+        use windows::core::Interface;
+        let mut host = Vec::new();
+        for b in barriers {
+            if b.kind == 0 {
+                // A split barrier transitions on its second half.
+                const BEGIN_ONLY: u32 = 1;
+                if b.flags & BEGIN_ONLY == 0 {
+                    let state = crate::host::texture_state(b.last as u32);
+                    list.transition(
+                        b.first,
+                        state,
+                        color_mip(b.first, b.second as u32),
+                        |texture, mip, before, after| {
+                            host.push(Barrier {
+                                kind: 0,
+                                flags: 0,
+                                first: texture.as_raw().cast_const().cast(),
+                                second: u64::from(mip) | (u64::from(before) << 32),
+                                last: u64::from(after),
+                            });
+                        },
+                    );
+                }
+            } else if let Some(b) = host_barrier(list, b) {
+                host.push(b);
+            }
+        }
         // Buffers have host copies, not resources the barrier can name:
         // a barrier on one waits for every shader write before it.
         if barriers.iter().any(|b| {
@@ -400,13 +405,38 @@ extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> 
 /// Moves a title texture's host copy to `state` in the list, if needed.
 #[cfg(windows)]
 pub(crate) fn ensure_state(list: &crate::host::HostList, resource: This, state: u32) {
+    ensure_mips(list, resource, state, None);
+}
+
+/// The selected mip of a regular 2D color target. Other resources retain
+/// the existing whole-resource tracking.
+#[cfg(windows)]
+fn color_mip(resource: This, mip: u32) -> Option<std::ops::Range<u32>> {
+    if mip == u32::MAX {
+        return None;
+    }
+    let texture = crate::resource::host_resource(resource)?;
+    (mip < crate::host::color_mip_count(texture)?).then(|| mip..mip + 1)
+}
+
+#[cfg(windows)]
+pub(crate) fn ensure_mips(
+    list: &crate::host::HostList,
+    resource: This,
+    state: u32,
+    mips: Option<std::ops::Range<u32>>,
+) {
     use windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_STATES as State;
-    if let Some((texture, before)) = list.transition(resource, state) {
-        let state = crate::host::legal_state(texture, state);
-        let barrier = crate::host::transition(texture, State(before as i32), State(state as i32));
+    list.transition(resource, state, mips, |texture, mip, before, after| {
+        let barrier = crate::host::transition_subresource(
+            texture,
+            mip,
+            State(before as i32),
+            State(after as i32),
+        );
         // SAFETY: an open list and a live texture.
         unsafe { list.list.ResourceBarrier(&[barrier]) };
-    }
+    });
 }
 
 #[cfg(windows)]
@@ -552,10 +582,17 @@ extern "system" fn copy_texture_region(
             let Some(texture) = crate::resource::host_resource(src.resource) else {
                 return;
             };
-            ensure_state(list, src.resource, COPY_SOURCE);
+            let mips = color_mip(src.resource, src.footprint.offset as u32);
+            ensure_mips(list, src.resource, COPY_SOURCE, mips);
             from.resource = texture.as_raw().cast_const().cast();
         }
-        ensure_state(list, dst.resource, COPY_DEST);
+        // For a subresource location, the low word of the footprint union is its index.
+        let mips = if dst.kind == 0 {
+            color_mip(dst.resource, dst.footprint.offset as u32)
+        } else {
+            None
+        };
+        ensure_mips(list, dst.resource, COPY_DEST, mips);
         crate::texture::host_written(dst.resource);
         let mut to_location = dst;
         to_location.resource = to.as_raw().cast_const().cast();
@@ -715,17 +752,16 @@ extern "system" fn clear_rtv(
             unsafe { std::slice::from_raw_parts(rects.cast(), count as usize) }
         });
         const RENDER_TARGET: u32 = 0x4;
-        let rtv = host.rtv(Some(texture), record.desc().as_ref());
+        let desc = record.desc();
+        let rtv = host.rtv(Some(texture), desc.as_ref());
+        ensure_mips(
+            list,
+            record.resource,
+            RENDER_TARGET,
+            crate::descriptor::rtv_mips(texture, desc.as_ref()),
+        );
         // SAFETY: an open list, a fresh view of a live texture.
         unsafe {
-            if let Some((_, before)) = list.transition(record.resource, RENDER_TARGET) {
-                use windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_STATES as State;
-                list.list.ResourceBarrier(&[crate::host::transition(
-                    texture,
-                    State(before as i32),
-                    State(RENDER_TARGET as i32),
-                )]);
-            }
             list.list.ClearRenderTargetView(rtv, color, rects);
         }
     }
