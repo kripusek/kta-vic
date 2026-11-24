@@ -15,7 +15,7 @@
 //! descriptors, buffer views in tables); buffers read through directly
 //! indexed heaps keep what their first use copied.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry as MapEntry};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +47,7 @@ pub(crate) struct Shadow {
 
 #[derive(Default)]
 struct Before {
-    snapshot: Option<(usize, Vec<u8>)>,
+    snapshot: Snapshot,
     unchanged: UnchangedPages,
 }
 
@@ -89,34 +89,75 @@ impl UnchangedPages {
     }
 }
 
-/// Snapshot memory kept for reuse (already touched, so no page faults).
-static POOL: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
-
-/// An empty buffer with room for `n` bytes, from the pool if it has one.
-fn pooled(n: usize) -> Vec<u8> {
-    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    let fit = pool
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| v.capacity() >= n)
-        .min_by_key(|(_, v)| v.capacity())
-        .map(|(i, _)| i);
-    let mut v = match fit {
-        Some(i) => pool.swap_remove(i),
-        None => Vec::with_capacity(n),
-    };
-    v.clear();
-    v
+/// Snapshot storage by title page. Only declared bytes within a page are
+/// initialized from the shadow. The bounds are used by the comparison cache.
+#[derive(Default)]
+struct Snapshot {
+    pages: BTreeMap<usize, Box<[u8]>>,
+    bounds: Option<(usize, usize)>,
 }
 
-/// Returns a snapshot buffer to the pool (at most 8 kept, the largest).
-fn give_back(v: Vec<u8>) {
-    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    pool.push(v);
-    if pool.len() > 8 {
-        pool.sort_by_key(|v| std::cmp::Reverse(v.capacity()));
-        pool.truncate(8);
+impl Snapshot {
+    fn capture(&mut self, address: usize, mut bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let end = address + bytes.len();
+        self.bounds = Some(
+            self.bounds
+                .map_or((address, end), |(lo, hi)| (lo.min(address), hi.max(end))),
+        );
+        let mut address = address;
+        while !bytes.is_empty() {
+            let offset = address % PAGE;
+            let n = (PAGE - offset).min(bytes.len());
+            match self.pages.entry(address / PAGE) {
+                MapEntry::Occupied(mut entry) => {
+                    entry.get_mut()[offset..offset + n].copy_from_slice(&bytes[..n]);
+                }
+                MapEntry::Vacant(entry) => {
+                    let page = match take_page() {
+                        Some(mut page) => {
+                            page[offset..offset + n].copy_from_slice(&bytes[..n]);
+                            page
+                        }
+                        None if n == PAGE => bytes[..n].into(),
+                        None => {
+                            let mut page = vec![0; PAGE].into_boxed_slice();
+                            page[offset..offset + n].copy_from_slice(&bytes[..n]);
+                            page
+                        }
+                    };
+                    entry.insert(page);
+                }
+            }
+            address += n;
+            bytes = &bytes[n..];
+        }
     }
+
+    fn release(&mut self) {
+        give_back(std::mem::take(&mut self.pages).into_values());
+        self.bounds = None;
+    }
+}
+
+/// Reuse up to 256 MiB of snapshot pages across submissions.
+static POOL: Mutex<Vec<Box<[u8]>>> = Mutex::new(Vec::new());
+const KEPT: usize = 4096;
+
+fn take_page() -> Option<Box<[u8]>> {
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).pop()
+}
+
+fn page_buffer() -> Box<[u8]> {
+    take_page().unwrap_or_else(|| vec![0; PAGE].into_boxed_slice())
+}
+
+fn give_back(pages: impl IntoIterator<Item = Box<[u8]>>) {
+    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    let available = KEPT - pool.len();
+    pool.extend(pages.into_iter().take(available));
 }
 
 const NOT_WATCHED: u8 = 2;
@@ -188,10 +229,8 @@ impl Shadow {
 
     /// At submission, after the range's refresh: a submitted list's shaders
     /// write this range. Its bytes are kept to tell later what the GPU wrote:
-    /// one snapshot per copy and submission, grown to cover every range the
-    /// submission declares (the world declares overlapping views of its
-    /// 174 MB heap dozens of times), in reused memory (fresh snapshots cost
-    /// ~2.3 million page faults per world frame).
+    /// reused page buffers keep only newly declared bytes, after their
+    /// refresh and without copying or overwriting earlier snapshots.
     pub(crate) fn writing(&self, address: usize, len: usize) {
         let (from, to) = self.inside(address, len);
         // The parts no earlier range of the submission declared: their
@@ -215,41 +254,15 @@ impl Shadow {
             pending.push((address, address + len));
             fresh
         };
-        // SAFETY: inside the mapping.
-        let host =
-            |a: usize, b: usize| unsafe { std::slice::from_raw_parts(self.data.add(a), b - a) };
-        let mut before = self.before.lock().unwrap_or_else(|e| e.into_inner());
-        let before = &mut before.snapshot;
-        let old = match &*before {
-            Some((at, bytes)) => (*at, at + bytes.len()),
-            None => (from, from),
-        };
-        let (start, end) = (old.0.min(from), old.1.max(to));
-        if (start, end) != old {
-            // Parts newly covered from the copy, the rest as it was taken.
-            let mut grown = pooled(end - start);
-            match before.take() {
-                Some((at, bytes)) => {
-                    grown.extend_from_slice(host(start, at));
-                    grown.extend_from_slice(&bytes);
-                    grown.extend_from_slice(host(at + bytes.len(), end));
-                    give_back(bytes);
-                }
-                None => grown.extend_from_slice(host(start, end)),
-            }
-            *before = Some((start, grown));
+        if fresh.is_empty() {
+            return;
         }
-        // What the snapshot already held of the fresh parts (it spans the
-        // gaps between the ranges declared so far) was taken before their
-        // refresh: taken again, or the refresh would pass for a shader's
-        // write and go back over what the title writes meanwhile.
-        if let Some((at, bytes)) = &mut *before {
-            for (a, e) in fresh {
-                let (a, e) = (a.max(old.0), e.min(old.1));
-                if a < e {
-                    bytes[a - *at..e - *at].copy_from_slice(host(a, e));
-                }
-            }
+        let start = self.start as usize;
+        let mut before = self.before.lock().unwrap_or_else(|e| e.into_inner());
+        for (from, to) in fresh {
+            // SAFETY: inside the mapping and the submission has yet to run.
+            let bytes = unsafe { std::slice::from_raw_parts(self.data.add(from), to - from) };
+            before.snapshot.capture(start + from, bytes);
         }
     }
 
@@ -269,13 +282,12 @@ impl Shadow {
         let mut written = 0;
         let (from, to) = self.inside(address, len);
         let start = self.start as usize;
-        if let Some((taken, before)) = snapshot.as_mut()
-            && *taken <= from
-            && to <= *taken + before.len()
+        if let Some((lo, hi)) = snapshot.bounds
+            && lo <= start + from
+            && start + to <= hi
             && from < to
         {
-            unchanged.begin(start + *taken, start + *taken + before.len());
-            let before = &mut before[from - *taken..to - *taken];
+            unchanged.begin(lo, hi);
             // By 64 KiB piece: the copy compared with its bytes before the
             // submission, title memory read only where the GPU wrote.
             // An unchanged page is never modified by copy-back, so later
@@ -284,13 +296,23 @@ impl Shadow {
             let mut synced = Vec::new();
             let mut at = from;
             while at < to {
-                let n = (PAGE - (start + at) % PAGE).min(to - at);
-                // SAFETY: inside the mapping; only the submitting thread
-                // writes it.
+                let address = start + at;
+                let page = address / PAGE;
+                let offset = address % PAGE;
+                let n = (PAGE - offset).min(to - at);
+                if unchanged.pages[page - unchanged.start / PAGE] {
+                    at += n;
+                    continue;
+                }
+                let Some(saved) = snapshot.pages.get_mut(&page) else {
+                    at += n;
+                    continue;
+                };
+                // SAFETY: inside the mapping; only the submitting thread writes it.
                 let host = unsafe { std::slice::from_raw_parts_mut(self.data.add(at), n) };
-                let old = &mut before[at - from..at - from + n];
+                let old = &mut saved[offset..offset + n];
                 if unchanged.differs(start + at, host, old)
-                    && let title = &mut title.get_or_insert_with(|| vec![0u8; PAGE])[..n]
+                    && let title = &mut title.get_or_insert_with(page_buffer)[..n]
                     && crate::host::read_into((start + at) as *const u8, title)
                 {
                     // Title memory with the GPU's bytes put in; the copy
@@ -314,6 +336,7 @@ impl Shadow {
                 }
                 at += n;
             }
+            give_back(title);
             // Pages made equal to title memory are current in the copy, so
             // our own write is not taken for the title's; others keep what
             // they had (a title write there shows at the next refresh).
@@ -334,11 +357,9 @@ impl Shadow {
         // submission runs at a time), and the snapshot with the last range.
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.retain(|&r| r != (address, address + len));
-        if pending.is_empty()
-            && let Some((_, bytes)) = snapshot.take()
-        {
+        if pending.is_empty() {
             unchanged.clear();
-            give_back(bytes);
+            snapshot.release();
         }
         written
     }
@@ -663,6 +684,34 @@ mod tests {
     use std::ops::Range;
 
     #[test]
+    fn page_snapshot_captures_gaps_without_replacing_earlier_bytes() {
+        let base = PAGE - 3;
+        let mut source = vec![1; PAGE + 8];
+        let mut snapshot = Snapshot::default();
+        for &(a, b) in &[(0, 5), (PAGE + 1, PAGE + 8)] {
+            snapshot.capture(base + a, &source[a..b]);
+        }
+
+        // The previously untouched gap was refreshed before a spanning
+        // declaration. Already declared bytes keep their first snapshot.
+        source.fill(7);
+        let fresh = outside(2, PAGE + 4, vec![(0, 5), (PAGE + 1, PAGE + 8)]);
+        for (a, b) in fresh {
+            snapshot.capture(base + a, &source[a..b]);
+        }
+        for (offset, expected) in
+            (0..source.len()).map(|i| (i, if (5..PAGE + 1).contains(&i) { 7 } else { 1 }))
+        {
+            let address = base + offset;
+            assert_eq!(snapshot.pages[&(address / PAGE)][address % PAGE], expected);
+        }
+        assert_eq!(snapshot.bounds, Some((base, base + source.len())));
+        snapshot.release();
+        assert!(snapshot.pages.is_empty());
+        assert_eq!(snapshot.bounds, None);
+    }
+
+    #[test]
     fn partial_match_leaves_unchecked_bytes_visible() {
         let mut unchanged = UnchangedPages::default();
         let before = vec![0; PAGE];
@@ -849,7 +898,7 @@ mod tests {
         // What the shader wrote does go back, in either kind of range.
         assert_eq!((peek(a + 7), peek(b + 9)), (9, 7));
         assert!(
-            s.before.lock().unwrap().snapshot.is_none(),
+            s.before.lock().unwrap().snapshot.bounds.is_none(),
             "the snapshot is done"
         );
     }
