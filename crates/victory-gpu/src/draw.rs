@@ -839,23 +839,6 @@ impl State {
         }
     }
 
-    /// Whole rectangles available in the bound per-vertex buffers.
-    fn rectangle_vertices(&self, p: &HostPipeline) -> Option<u32> {
-        const EXPANDED_BYTES: u32 = 4 << 20;
-        // Doubling the vertex count must stay within the indirect draw cap.
-        let mut vertices = 1 << 23;
-        for e in p.inputs.iter().filter(|e| !e.per_instance) {
-            let v = self.vertex[e.slot as usize];
-            if v.address == 0 || v.stride == 0 {
-                return None;
-            }
-            vertices = vertices
-                .min(v.size / v.stride)
-                .min(EXPANDED_BYTES / 2 / v.stride);
-        }
-        (vertices >= 3).then_some(vertices / 3 * 3)
-    }
-
     /// Binds vertex buffers holding the rectangles of vertices `first..first
     /// + count` as triangles, made when the list is submitted.
     fn rectangles(&self, list: &HostList, count: u32, first: u32) -> bool {
@@ -882,6 +865,10 @@ impl State {
                 || crate::shadow::find(from, rects * 3 * stride).is_none()
             {
                 once!(slot, "rectangle vertices outside their buffer");
+                return false;
+            }
+            if !crate::primitive::rectangle_elements_fit(v.stride, &elements) {
+                once!(slot, "rectangle vertex elements exceed their stride");
                 return false;
             }
             let Some((gpu, to)) = list.scratch(rects * 6 * stride) else {
@@ -966,26 +953,6 @@ impl State {
         let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
         #[cfg(not(feature = "diagnostics"))]
         let why = |_: &str| {};
-        let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
-            #[cfg(feature = "diagnostics")]
-            crate::pipeline::note_drop(self.pipeline as This);
-            return false;
-        };
-        let indirect_rectangles = kind == DRAW && self.topology == RECTANGLES;
-        let matches_kind = match kind {
-            DRAW => !p.compute && !p.mesh,
-            INDEXED => self.topology != RECTANGLES && !p.compute && !p.mesh,
-            MESH => !p.compute && p.mesh,
-            DISPATCH => p.compute,
-            _ => false,
-        };
-        if !matches_kind {
-            why(&format!(
-                "pipeline mismatch (compute {}, mesh {}, topology {})",
-                p.compute, p.mesh, self.topology
-            ));
-            return false;
-        }
         let len = u64::from(stride) * u64::from(max.max(1));
         let Some(args) = crate::shadow::find(arguments, len) else {
             why("arguments outside title buffers");
@@ -1008,84 +975,52 @@ impl State {
             why("no host signature");
             return false;
         };
-        let rectangle_vertices = if indirect_rectangles {
-            let Some(vertices) = self.rectangle_vertices(p) else {
-                why("rectangle vertices outside their buffers");
-                return false;
-            };
-            vertices
-        } else {
-            0
-        };
-        // As for direct rectangles, the expansion sees CPU vertex data and the
-        // shader receives triangle-list vertex IDs.
-        if rectangle_vertices != 0
-            && (!self.prepare(list, false) || !self.rectangles(list, rectangle_vertices, 0))
-        {
-            why("rectangle preparation failed");
-            return false;
-        }
         args.refresh(list, arguments, len);
         if let Some((s, at)) = &counter {
             s.refresh(list, *at, 4);
         }
-        // Bounded first: the clamp binds a compute pipeline of its own and
-        // copies clamped active records into a scratch buffer at offset 0.
-        let count_arg = counter.as_ref().map(|(s, at)| (&s.buffer, s.offset(*at)));
-        let Some(bounded) = crate::indirect::bound(
-            list,
-            (&args.buffer, args.offset(arguments)),
-            count_arg,
-            (kind, stride, max),
-            rectangle_vertices,
-        ) else {
+        // Bounded first: the clamp binds a compute pipeline of its own.
+        if !crate::indirect::bound(list, &args.buffer, args.gpu(arguments), (kind, stride, max)) {
             why("not bounded (no clamp, or arguments not 4-byte aligned)");
             return false;
-        };
-        self.host_roots[1] = 0;
-        if rectangle_vertices == 0 {
-            self.host_pipeline = 0;
         }
+        self.host_pipeline = 0;
+        self.host_roots[1] = 0;
         let ran = match kind {
-            DRAW if rectangle_vertices != 0 => {
-                // Preparation succeeded before the clamp charged the budget.
-                // Restore the graphics PSO replaced by the clamp's compute pass.
-                // SAFETY: an open list and the live pipeline retained by prepare.
-                unsafe { list.list.SetPipelineState(&p.pso) };
-                true
-            }
-            DRAW | INDEXED => self.prepare(list, kind == INDEXED),
+            DRAW | INDEXED => self.topology != RECTANGLES && self.prepare(list, kind == INDEXED),
             MESH => self.prepare_for(list, false, true),
-            DISPATCH => self.bind(list, p, true),
+            DISPATCH => match crate::pipeline::host_pipeline(self.pipeline as This) {
+                Some(p) if p.compute => self.bind(list, p, true),
+                _ => false,
+            },
             _ => false,
         };
         if !ran {
-            crate::indirect::done(list, &bounded);
-            why("prepare failed");
+            crate::indirect::done(list, &args.buffer);
+            #[cfg(feature = "diagnostics")]
+            match crate::pipeline::host_pipeline(self.pipeline as This) {
+                None => crate::pipeline::note_drop(self.pipeline as This),
+                Some(p) => why(&format!("prepare failed (compute {}, mesh {})", p.compute, p.mesh)),
+            }
             return false;
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| {
-            let operation = if indirect_rectangles {
-                format!("indirect rectangles max {max} at {arguments:#x}")
-            } else {
-                format!("indirect kind {kind} max {max} at {arguments:#x}")
-            };
-            self.op_text(operation, kind == DISPATCH)
+            self.op_text(format!("indirect kind {kind} max {max} at {arguments:#x}"), kind == DISPATCH)
         });
-        // SAFETY: an open list with everything set; the scratch buffer and
-        // host copies are kept alive by the list, and the signature is cached.
+        // SAFETY: an open list with everything set; the buffers are host
+        // copies the list keeps alive (refresh), the signature is cached.
         unsafe {
             list.list.ExecuteIndirect(
                 &signature,
                 max,
-                &bounded,
-                0,
+                &args.buffer,
+                args.offset(arguments),
                 counter.as_ref().map(|(s, _)| &s.buffer),
                 counter.as_ref().map_or(0, |(s, at)| s.offset(*at)),
             )
         };
-        crate::indirect::done(list, &bounded);
+        crate::indirect::done(list, &args.buffer);
         if kind == DISPATCH {
             DISPATCHED.fetch_add(1, Ordering::Relaxed);
         } else {

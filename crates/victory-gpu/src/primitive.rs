@@ -10,6 +10,17 @@
 //! shaders linear in their inputs (blits, 2D quads). Inputs in formats
 //! [`components`] does not know keep the first vertex's value.
 
+/// Whether every vertex element decoded by rectangle expansion fits its stride.
+pub(crate) fn rectangle_elements_fit(stride: u32, elements: &[(u32, u32)]) -> bool {
+    elements.iter().all(|&(offset, format)| {
+        components(format).is_none_or(|(count, kind)| {
+            offset
+                .checked_add((count * kind.bytes()) as u32)
+                .is_some_and(|end| end <= stride)
+        })
+    })
+}
+
 /// Expands `rects` rectangles of `stride`-byte vertices from `src` into six
 /// vertices each in `dst`: `(v0, v1, v2)` and `(v0, v2, v3)`, so both
 /// triangles turn the same way. `elements` are (byte offset, format).
@@ -130,6 +141,16 @@ fn f32_to_half(v: f32) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rectangle_expansion_requires_room_for_decoded_elements() {
+        assert!(!rectangle_elements_fit(8, &[(0, 2)]));
+        assert!(rectangle_elements_fit(16, &[(0, 2)]));
+        assert!(!rectangle_elements_fit(16, &[(4, 2)]));
+        assert!(rectangle_elements_fit(20, &[(4, 2)]));
+        assert!(!rectangle_elements_fit(16, &[(u32::MAX, 2)]));
+        assert!(rectangle_elements_fit(8, &[(0, u32::MAX)]));
+    }
 
     /// A rectangle of float2 positions and RGBA8 colors, given as top
     /// left, bottom left, bottom right: the fourth corner completes the
