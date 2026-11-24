@@ -357,14 +357,33 @@ fn numeric_mask_alu(st: &Structured, inst: &Inst) -> bool {
 }
 
 /// A select that needs the actual scalar mask words and console lane index.
-fn numeric_select(st: &Structured, inst: &Inst) -> bool {
-    inst.name() == "v_cndmask_b32"
-        && matches!(&inst.fields, Fields::Valu(v)
-            if matches!(v.src.get(2), Some(Operand::Scalar { code, .. }) if *code != NULL))
-        && inst
+fn symbolic_select_mask(st: &Structured, inst: &Inst) -> Option<Bool> {
+    inst.writes
+        .first()
+        .and_then(|&(_, v)| st.select_masks.get(&v))
+        .copied()
+}
+
+fn numeric_select(st: &Structured, inst: &Inst) -> Option<u8> {
+    if inst.name() != "v_cndmask_b32"
+        || inst
             .writes
             .first()
-            .is_some_and(|&(_, v)| !st.select_masks.contains_key(&v))
+            .is_none_or(|&(_, v)| st.select_masks.contains_key(&v))
+    {
+        return None;
+    }
+    let Fields::Valu(v) = &inst.fields else {
+        return None;
+    };
+    match v.src.get(2) {
+        Some(&Operand::Scalar { code, .. }) if code != NULL => Some(code),
+        _ => None,
+    }
+}
+
+fn numeric_mask_words(inst: &Inst, code: u8, wave64: bool) -> impl Iterator<Item = Value> + '_ {
+    (code..=code + u8::from(wave64)).filter_map(|c| inst.read(Reg::S(c)))
 }
 
 /// Where half `h` (dword h / 2, the high half when odd) of a parameter
@@ -936,6 +955,7 @@ fn collect_cross_block_masks(
     p: &Program,
     st: &Structured,
     def_block: &HashMap<Value, usize>,
+    numeric_masks: bool,
 ) -> HashMap<Option<usize>, Vec<Value>> {
     let mut out: HashMap<Option<usize>, Vec<Value>> = HashMap::new();
     let mut record = |v: Value, reader_b: usize| {
@@ -958,15 +978,34 @@ fn collect_cross_block_masks(
                     record(r, b);
                 }
             }
+            if numeric_masks && let Some(code) = numeric_select(st, inst) {
+                for word in numeric_mask_words(inst, code, p.wave64) {
+                    record(word, b);
+                }
+            }
         }
         let exit_when = match st.exits[b] {
             LaneExit::Branch { when, .. } => Some(when),
             _ => None,
         };
-        for g in st.guards[b].iter().flatten().copied().chain(exit_when) {
+        for g in st.guards[b]
+            .iter()
+            .flatten()
+            .copied()
+            .chain(exit_when)
+            .chain(
+                block
+                    .insts
+                    .iter()
+                    .filter_map(|inst| symbolic_select_mask(st, inst)),
+            )
+        {
             for a in st.bools.support(g) {
-                if let Atom::Opaque(v) = a {
-                    record(v, b);
+                if let Atom::Opaque(lo, hi) = a {
+                    record(lo, b);
+                    if let Some(hi) = hi {
+                        record(hi, b);
+                    }
                 }
             }
         }
@@ -1102,7 +1141,8 @@ impl<'a> Lower<'a> {
                         || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
                         || implicit_derivatives(n)
                         || reads_mask_as_data(x.st, i)
-                        || numeric_masks && (numeric_select(x.st, i) || numeric_mask_alu(x.st, i))
+                        || numeric_masks
+                            && (numeric_select(x.st, i).is_some() || numeric_mask_alu(x.st, i))
                 })
             }) || {
                 // Masks held as numbers or constant lane sets: the lane
@@ -1118,6 +1158,7 @@ impl<'a> Lower<'a> {
                         .flatten()
                         .copied()
                         .chain(whens)
+                        .chain(x.st.select_masks.values().copied())
                         .collect();
                 all.sort_unstable();
                 all.dedup();
@@ -1125,7 +1166,7 @@ impl<'a> Lower<'a> {
                     x.st.bools
                         .support(g)
                         .iter()
-                        .any(|a| matches!(a, Atom::Opaque(_) | Atom::Constant(_)))
+                        .any(|a| matches!(a, Atom::Opaque(..) | Atom::Constant(_)))
                 })
             };
 
@@ -1213,7 +1254,8 @@ impl<'a> Lower<'a> {
                                 let emu_dwords = ballot_dwords + exchange_dwords;
                                 s.lds_dwords = title_lds_dwords.saturating_add(emu_dwords);
                                 lds_overflow = emu_dwords > 0 && s.lds_dwords > 8192;
-                                cross_block_masks = collect_cross_block_masks(p, x.st, &def_block);
+                                cross_block_masks =
+                                    collect_cross_block_masks(p, x.st, &def_block, numeric_masks);
                             }
                             if total_threads <= 64 && has_lds_mem && !has_s_barrier {
                                 need_lds_barriers = true;
@@ -1239,7 +1281,8 @@ impl<'a> Lower<'a> {
                             let emu_dwords = ballot_dwords + exchange_dwords;
                             s.lds_dwords = title_lds_dwords.saturating_add(emu_dwords);
                             lds_overflow = emu_dwords > 0 && s.lds_dwords > 8192;
-                            cross_block_masks = collect_cross_block_masks(p, x.st, &def_block);
+                            cross_block_masks =
+                                collect_cross_block_masks(p, x.st, &def_block, numeric_masks);
                         }
                         if total_threads > 1 && total_threads <= 64 && has_lds_mem && !has_s_barrier
                         {
@@ -1847,10 +1890,23 @@ impl<'a> Lower<'a> {
                 add(r);
             }
         }
-        if let Some(g) = self.x.st.guards[b][i] {
+        if self.numeric_masks
+            && let Some(code) = numeric_select(self.x.st, inst)
+        {
+            for word in numeric_mask_words(inst, code, self.x.p.wave64) {
+                add(word);
+            }
+        }
+        for g in self.x.st.guards[b][i]
+            .into_iter()
+            .chain(symbolic_select_mask(self.x.st, inst))
+        {
             for a in self.x.st.bools.support(g) {
-                if let Atom::Opaque(v) = a {
-                    add(v);
+                if let Atom::Opaque(lo, hi) = a {
+                    add(lo);
+                    if let Some(hi) = hi {
+                        add(hi);
+                    }
                 }
             }
         }
@@ -2963,12 +3019,9 @@ impl<'a> Lower<'a> {
             Atom::Quad(_) => Ok(self.s.m.bool(true)),
             // With console lanes, a mask held as a number is the console's:
             // the lane tests its own bit.
-            Atom::Opaque(v) if self.console_lanes => {
-                let hi = match self.pair_high(v) {
-                    Some(h) => Some(self.get(h)?),
-                    None => None,
-                };
-                let lo = self.get(v)?;
+            Atom::Opaque(lo, hi) if self.console_lanes => {
+                let hi = hi.map(|h| self.get(h)).transpose()?;
+                let lo = self.get(lo)?;
                 let word = |w: Val| match w {
                     Val::I32(x) => Ok(x),
                     _ => Err("an opaque lane mask"),
@@ -2982,7 +3035,7 @@ impl<'a> Lower<'a> {
                 let hi = self.s.m.i32((k >> 32) as u32);
                 Ok(self.lane_bit(at, lo, Some(hi)))
             }
-            Atom::Opaque(_) => Err("an opaque lane mask"),
+            Atom::Opaque(..) => Err("an opaque lane mask"),
             Atom::Constant(_) => Err("a constant lane mask"),
         }
     }
@@ -3049,38 +3102,6 @@ impl<'a> Lower<'a> {
             self.s.flags |= flags::WAVE_OPS;
         }
         Ok(self.lane_bit(self.cur, lo, hi))
-    }
-
-    /// The value of the high dword of the wave64 register pair whose low
-    /// dword holds `lo` (none in wave32).
-    fn pair_high(&self, lo: Value) -> Option<Value> {
-        if !self.x.native.wave64 {
-            return None;
-        }
-        let p = self.x.p;
-        let pick = |reg: Reg| match reg {
-            Reg::S(c) => Some(Reg::S(c + 1)),
-            _ => None,
-        };
-        if let Some(&(reg, _)) = p.inputs.iter().find(|i| i.1 == lo) {
-            let h = pick(reg)?;
-            return p.inputs.iter().find(|i| i.0 == h).map(|i| i.1);
-        }
-        if let Some(&(b, i)) = self.phi_at.get(&lo) {
-            let h = pick(p.blocks[b].phis[i].reg)?;
-            return p.blocks[b]
-                .phis
-                .iter()
-                .find(|q| q.reg == h)
-                .map(|q| q.value);
-        }
-        let b = *self.def_block.get(&lo)?;
-        let inst = p.blocks[b]
-            .insts
-            .iter()
-            .find(|i| i.writes.iter().any(|w| w.1 == lo))?;
-        let &(reg, _) = inst.writes.iter().find(|w| w.1 == lo)?;
-        inst.write(pick(reg)?)
     }
 
     fn guard(&mut self, b: usize, i: usize) -> Result<Option<V>, Why> {
@@ -8235,14 +8256,16 @@ impl<'a> Lower<'a> {
         {
             let mut todo = Vec::new();
             for a in self.x.st.bools.support(when) {
-                if let Atom::Opaque(v) = a {
-                    let lo = self.x.st.highs.get(&v).copied().unwrap_or(v);
-                    if self.x.st.masks.contains_key(&lo)
-                        && !self.ballots.contains_key(&lo)
-                        && !self.ballot_fail.contains_key(&lo)
-                        && !todo.contains(&lo)
-                    {
-                        todo.push(lo);
+                if let Atom::Opaque(lo, hi) = a {
+                    for v in std::iter::once(lo).chain(hi) {
+                        let lo = self.x.st.highs.get(&v).copied().unwrap_or(v);
+                        if self.x.st.masks.contains_key(&lo)
+                            && !self.ballots.contains_key(&lo)
+                            && !self.ballot_fail.contains_key(&lo)
+                            && !todo.contains(&lo)
+                        {
+                            todo.push(lo);
+                        }
                     }
                 }
             }
@@ -8404,6 +8427,13 @@ impl<'a> Lower<'a> {
                 let Some(qb) = self.tail[q] else { continue };
                 let qb = self.edges.get(&(q, b)).copied().unwrap_or(qb);
                 let arg = phi.args[n];
+                if self.read_phis.contains(&phi.value)
+                    && !self.vals.contains_key(&arg)
+                    && let Some(&(param, dword)) = self.params.get(&arg)
+                {
+                    let value = self.user(param, dword);
+                    self.vals.insert(arg, value);
+                }
                 let x = match (self.vals.get(&arg).copied(), bit) {
                     (Some(Val::I32(x)), false) | (Some(Val::Bit(x)), true) => x,
                     (Some(Val::Bit(_)), false) if self.read_phis.contains(&phi.value) => {
@@ -8648,6 +8678,172 @@ mod select_tests {
             let features = emitted.part(FourCC::SFI0).unwrap();
             let wave_ops = u64::from_le_bytes(features.data.try_into().unwrap()) & 0x4000 != 0;
             assert_eq!(wave_ops, uses_select);
+        }
+    }
+
+    fn compute_fixture(words: &[u32], user_data: u8) -> NativeProgram {
+        NativeProgram {
+            stage: HwStage::Cs,
+            wave64: true,
+            vgprs: 4,
+            layout: vec![RootParam {
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data,
+                slot: 0,
+            }],
+            used: vec![UsedResource {
+                kind: ResourceType::Uav,
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                lower_bound: 0,
+                stride: 0,
+                dwords: 4,
+                user_data,
+                slot: 0,
+            }],
+            io: crate::native::StageIo::Cs(ComputeIo {
+                rsrc2: (u32::from(user_data) + 1) * 2,
+                threads: [64, 1, 1],
+            }),
+            code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+        }
+    }
+
+    #[test]
+    fn numeric_select_reads_a_cross_block_ballot() {
+        let native = compute_fixture(
+            &[
+                0xbe81_0380, // s1 = table address high
+                0xf408_0200,
+                0xfa00_0000, // s[8:11] = UAV
+                0x7d88_0085, // v_cmp_gt_u32 vcc, 5, v0
+                0xbf82_0001, // jump to the next block
+                0x7e02_0280, // skipped
+                0xbeeb_0381, // vcc_hi = 1, retaining compare's vcc_lo
+                0x7e02_028b,
+                0x7e04_029d, // v1 = 11, v2 = 29
+                0xd501_0003,
+                0x01aa_0501, // select v3, v1, v2, vcc
+                0x3402_0082, // v1 = 4 * v0
+                0xe070_1000,
+                0x8002_0301, // store v3 to UAV at v1
+                0xbf81_0000,
+            ],
+            0,
+        );
+        let c = crate::dxbc::build(&[]);
+        let c = Container::parse(&c).unwrap();
+        let p = crate::ir::build(&native.code, true, native.vgprs).unwrap();
+        let st = crate::structure::structure(&p).unwrap();
+        let io = crate::io::raise(&p, &native).unwrap();
+        let res = crate::resource::track(&p, &native.layout, native.stage).unwrap();
+        let mut shader = super::super::emit_for(
+            &c,
+            &native,
+            &p,
+            &st,
+            &io,
+            &res,
+            Some(super::super::WaveRange { min: 32, max: 32 }),
+        )
+        .unwrap();
+        validate_dxil(&mut shader.dxil);
+    }
+
+    #[test]
+    fn symbolic_select_keeps_both_opaque_mask_words() {
+        use crate::ir::Reg;
+        use crate::structure::Atom;
+
+        let words = [
+            0xbe86_0380, // s6 = 0
+            0xbe87_0381, // s7 = 1
+            0x8784_067e, // s_and_b64 s[4:5], exec, s[6:7]
+            0x7e02_028b,
+            0x7e04_029d, // v1 = 11, v2 = 29
+            0xd501_0003,
+            0x0012_0501, // select v3, v1, v2, s[4:5]
+            0xbf81_0000,
+        ];
+        let code: Vec<u8> = words.iter().flat_map(|w: &u32| w.to_le_bytes()).collect();
+        let p = crate::ir::build(&code, true, 4).unwrap();
+        let st = crate::structure::structure(&p).unwrap();
+        let insts = &p.blocks[0].insts;
+        let lo = insts[0].write(Reg::S(6)).unwrap();
+        let hi = insts[1].write(Reg::S(7)).unwrap();
+        let dst = insts[5].write(Reg::V(3)).unwrap();
+        assert!(
+            st.bools
+                .support(st.select_masks[&dst])
+                .contains(&Atom::Opaque(lo, Some(hi)))
+        );
+    }
+
+    #[test]
+    fn forwarded_root_constant_can_be_the_only_source_of_a_phi_argument() {
+        let mut native = compute_fixture(
+            &[
+                0xbe85_0380, // s5 = table address high
+                0xf408_0202,
+                0xfa00_0000, // s[8:11] = UAV from s[4:5]
+                0xbf06_8001, // compare s1, 0
+                0xbf85_0005, // jump to alternate assignment
+                0xd761_0002,
+                0x0001_0000, // v_writelane_b32 v2, s0, 0
+                0xd760_0003,
+                0x0001_0102, // v_readlane_b32 s3, v2, 0
+                0xbf82_0001, // jump to the join
+                0xbe83_0389, // alternate s3 = 9
+                0x7e06_0203, // join: v3 = s3
+                0x3402_0082, // v1 = 4 * v0
+                0xe070_1000,
+                0x8002_0301, // store v3 to UAV at v1
+                0xbf81_0000,
+            ],
+            4,
+        );
+        native.layout.push(RootParam {
+            root: RootType::Constants,
+            table_offset_dwords: 0,
+            sgprs: 2,
+            base_register: 0,
+            user_data: 0,
+            slot: 1,
+        });
+        let c = crate::dxbc::build(&[]);
+        let c = Container::parse(&c).unwrap();
+        let mut p = crate::ir::build(&native.code, true, native.vgprs).unwrap();
+        assert!(crate::sgpr_spill::forward(&mut p));
+        let st = crate::structure::structure(&p).unwrap();
+        let io = crate::io::raise(&p, &native).unwrap();
+        let res = crate::resource::track(&p, &native.layout, native.stage).unwrap();
+        let dead = crate::sgpr_spill::dead(&p);
+        assert_eq!(dead.len(), 2);
+        let mut shader = super::super::emit_program(
+            &c,
+            &native,
+            &p,
+            &st,
+            &io,
+            &res,
+            None,
+            Default::default(),
+            &dead,
+        )
+        .unwrap();
+        assert!(shader.user_data.iter().any(|dword| dword.index == 0));
+        validate_dxil(&mut shader.dxil);
+    }
+
+    fn validate_dxil(_dxil: &mut [u8]) {
+        #[cfg(windows)]
+        if let Ok(mut validator) = super::super::validator::Validator::load(
+            super::super::validator::Validator::default_path().as_deref(),
+        ) {
+            validator.validate(_dxil).unwrap();
         }
     }
 }
