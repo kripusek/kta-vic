@@ -31,7 +31,7 @@ pub(crate) struct HostHeap {
     dynamic: u32,
     /// Where the search for free dynamic slots starts, and which are taken
     /// (by lists not yet reset).
-    next: Mutex<(u32, Vec<bool>)>,
+    slots: Mutex<DynamicSlots>,
 }
 
 impl Drop for HostHeap {
@@ -78,6 +78,55 @@ const DYNAMIC: u32 = 1 << 19;
 /// Smaller dynamic reserve when the host caps the whole view heap at
 /// [`PORTABLE_VIEWS`].
 const DYNAMIC_CAPPED: u32 = 1 << 16;
+
+/// A failed search bounds every later request until a command list returns slots.
+struct DynamicSlots {
+    taken: Vec<bool>,
+    next: usize,
+    smallest_failure: Option<u32>,
+}
+
+impl DynamicSlots {
+    fn new(capacity: u32) -> Self {
+        Self { taken: vec![false; capacity as usize], next: 0, smallest_failure: None }
+    }
+
+    fn allocate(&mut self, count: u32) -> Option<u32> {
+        if count == 0 || count as usize > self.taken.len()
+            || self.smallest_failure.is_some_and(|failed| count >= failed)
+        {
+            return None;
+        }
+        let n = count as usize;
+        let capacity = self.taken.len();
+        // Try each start position once. A free span may cross the cursor
+        // after a release, but a descriptor table cannot wrap around the heap.
+        let prefix_end = if self.next == 0 { 0 } else { (self.next + n - 1).min(capacity) };
+        for range in [self.next..capacity, 0..prefix_end] {
+            let mut free = 0;
+            for at in range {
+                free = if self.taken[at] { 0 } else { free + 1 };
+                if free == n {
+                    let first = at + 1 - n;
+                    self.taken[first..=at].fill(true);
+                    self.next = (at + 1) % capacity;
+                    return Some(first as u32);
+                }
+            }
+        }
+        self.smallest_failure = Some(count);
+        None
+    }
+
+    fn release(&mut self, first: u32, count: u32) {
+        if count != 0 && let Some(end) = first.checked_add(count)
+            && let Some(slots) = self.taken.get_mut(first as usize..end as usize)
+        {
+            slots.fill(false);
+            self.smallest_failure = None;
+        }
+    }
+}
 
 impl HostHeap {
     pub(crate) fn new(sampler: bool, count: u32) -> Option<Self> {
@@ -142,7 +191,7 @@ impl HostHeap {
             made: Mutex::new(vec![0; count as usize]),
             kept: Mutex::new(vec![None; (count + extra) as usize]),
             dynamic: extra,
-            next: Mutex::new((0, vec![false; extra as usize])),
+            slots: Mutex::new(DynamicSlots::new(extra)),
         };
         // A slot never written is undefined: shaders reading one (a slot
         // the title wrote in a way we do not know, or a table entry no
@@ -224,35 +273,14 @@ impl HostHeap {
         if self.sampler || n == 0 || n > self.dynamic {
             return None;
         }
-        let mut guard = self.next.lock().unwrap_or_else(|e| e.into_inner());
-        let (next, taken) = &mut *guard;
-        let cap = self.dynamic as usize;
-        let n = n as usize;
-        // Search from `next` on, then from the start.
-        let starts = (*next as usize..cap).chain(0..*next as usize);
-        let mut run = 0;
-        let mut found = None;
-        let mut last = usize::MAX;
-        for at in starts {
-            // A run cannot wrap past the end.
-            if at != last.wrapping_add(1) {
-                run = 0;
-            }
-            last = at;
-            run = if taken[at] { 0 } else { run + 1 };
-            if run == n {
-                found = Some(at + 1 - n);
-                break;
-            }
-        }
-        let Some(first) = found else {
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(first) = slots.allocate(n) else {
+            let cap = self.dynamic;
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(n, cap, "no free dynamic descriptor slots: a table is not made"));
             return None;
         };
-        taken[first..first + n].fill(true);
-        *next = ((first + n) % cap) as u32;
-        Some(self.count + first as u32)
+        Some(self.count + first)
     }
 
     /// The title slots this heap has host slots for; fewer than the title's
@@ -269,11 +297,7 @@ impl HostHeap {
         let Some(at) = first.checked_sub(self.count) else {
             return;
         };
-        let mut guard = self.next.lock().unwrap_or_else(|e| e.into_inner());
-        let end = (at + n).min(self.dynamic) as usize;
-        if let Some(slots) = guard.1.get_mut(at as usize..end) {
-            slots.fill(false);
-        }
+        self.slots.lock().unwrap_or_else(|e| e.into_inner()).release(at, n);
     }
 
     /// Makes slot `index` (a dynamic one) from `view`; a null view if the
@@ -935,6 +959,21 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptor_pressure_caches_failures_until_release() {
+        let mut slots = DynamicSlots::new(12);
+        assert_eq!(slots.allocate(8), Some(0));
+        assert_eq!(slots.allocate(5), None);
+        assert_eq!(slots.allocate(6), None);
+        assert_eq!(slots.allocate(3), Some(8));
+        // The free tail now straddles the search cursor at 11.
+        slots.release(8, 3);
+        assert_eq!(slots.allocate(4), Some(8));
+        assert_eq!(slots.allocate(1), None);
+        slots.release(0, 8);
+        assert_eq!(slots.allocate(8), Some(0));
+    }
 
     /// Dynamic slots stay taken until given back, and runs do not wrap.
     #[test]
