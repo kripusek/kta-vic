@@ -92,6 +92,9 @@ mod wave;
 #[cfg(all(test, windows))]
 mod wave_tests;
 
+#[cfg(test)]
+mod wave64_tests;
+
 #[cfg(all(test, windows))]
 fn check_gpu_coverage(ran: usize) {
     if ran == 0 {
@@ -157,6 +160,24 @@ pub struct UserData {
     pub dword: u32,
 }
 
+/// How a Wave64 compute shader is mapped onto the host device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Wave64Mode {
+    /// Emit native `WaveSize(64)` when compute lane semantics require it.
+    #[default]
+    Native,
+    /// Map virtual 64-lane waves onto 32-lane host waves (`WaveSize(32)`).
+    Wave32,
+    /// Emulate 64-lane waves in group-shared memory without `WaveSize`.
+    Emulate,
+}
+
+/// Options controlling DXIL emission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TranslateOptions {
+    pub wave64: Wave64Mode,
+}
+
 /// Wave sizes supported by a host GPU (`WaveLaneCountMin..=WaveLaneCountMax`).
 ///
 /// Used to pick a host-supported wave size for small Wave64 compute thread
@@ -208,6 +229,18 @@ pub fn translate_for(
     container: &[u8],
     host_waves: Option<WaveRange>,
 ) -> Result<HostShader, ShaderError> {
+    translate_target(container, host_waves, TranslateOptions::default())
+}
+
+pub fn translate_with(container: &[u8], options: TranslateOptions) -> Result<HostShader, ShaderError> {
+    translate_target(container, None, options)
+}
+
+fn translate_target(
+    container: &[u8],
+    host_waves: Option<WaveRange>,
+    options: TranslateOptions,
+) -> Result<HostShader, ShaderError> {
     let c = Container::parse(container)?;
     let dxil = c
         .part(FourCC::DXIL)
@@ -228,7 +261,7 @@ pub fn translate_for(
     let res = resource::track(&p, &native.layout, native.stage)?;
     let io = io::raise(&p, &native)?;
     let st = structure::structure(&p)?;
-    emit_for(&c, &native, &p, &st, &io, &res, host_waves)
+    emit_target(&c, &native, &p, &st, &io, &res, host_waves, options)
 }
 
 /// Emits a program whose earlier stages already ran (falling back to the
@@ -255,7 +288,32 @@ pub fn emit_for(
     res: &resource::Resources,
     host_waves: Option<WaveRange>,
 ) -> Result<HostShader, ShaderError> {
-    let original = emit_program(c, native, p, st, io, res, host_waves);
+    emit_target(c, native, p, st, io, res, host_waves, TranslateOptions::default())
+}
+
+pub fn emit_with(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+    options: TranslateOptions,
+) -> Result<HostShader, ShaderError> {
+    emit_target(c, native, p, st, io, res, None, options)
+}
+
+fn emit_target(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+    host_waves: Option<WaveRange>,
+    options: TranslateOptions,
+) -> Result<HostShader, ShaderError> {
+    let original = emit_program(c, native, p, st, io, res, host_waves, options);
     // Retry unsupported programs only. Threading can separate an unknown
     // register value from its apparent use on a mutually exclusive path.
     if !matches!(original, Err(ShaderError::Unsupported { .. })) {
@@ -269,7 +327,7 @@ pub fn emit_for(
     let st = structure::structure(&p)?;
     let io = io::raise(&p, native)?;
     let res = resource::track(&p, &native.layout, native.stage)?;
-    emit_program(c, native, &p, &st, &io, &res, host_waves)
+    emit_program(c, native, &p, &st, &io, &res, host_waves, options)
 }
 
 fn emit_program(
@@ -280,6 +338,7 @@ fn emit_program(
     io: &io::Io,
     res: &resource::Resources,
     host_waves: Option<WaveRange>,
+    options: TranslateOptions,
 ) -> Result<HostShader, ShaderError> {
     let sig = |fourcc| -> Result<Vec<container::SigElement>, ShaderError> {
         match c.part(fourcc) {
@@ -340,6 +399,7 @@ fn emit_program(
         prims,
         mesh_stride,
         host_waves,
+        options,
     })?;
     Ok(HostShader {
         stage: native.stage,
