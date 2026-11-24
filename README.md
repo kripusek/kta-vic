@@ -14,7 +14,7 @@ Checking for writes to mapped guest memory was one CPU cost during world renderi
 
 On a fresh profile, choose **Settings** at **Finish Setup?** with the controller Menu button or the **Esc** key. The game opens its seven-tab Settings menu before starting the story. We opened Control Scheme, Controller, Gameplay, and Display and used Back to return to setup.
 
-The verified startup above used the Series X profile. An earlier Series S trial on this machine presented black frames through player selection. Causeway now composites the Series S scene and UI planes. An offscreen test on Microsoft's WARP software renderer verified scaling, transparency, and layer order. A new Series S game run on the RTX is still pending. [Upstream Series S fix](https://github.com/Marvisak/VIctory/pull/211)
+The verified startup above used the Series X profile. The latest offline Series S run produced 71 black presented readbacks before player selection. The compositor fell back to the primary plane when it encountered a cropped or positioned plane. Causeway now applies source crops and destination placement when composing the scene and UI. An offscreen WARP test verified crop edges, placement, alpha blending, and layer order with 1080p and 4K planes. The updated path still needs a Series S title run. [Upstream Series S compositor](https://github.com/Marvisak/VIctory/pull/211)
 
 On Windows 11 with a Radeon RX 6700 XT, upstream's pipeline-cache update rendered the first mission's title card. The following scene remained dark and ran at 0.5–1.8 seconds per frame. [Upstream test results](https://github.com/Marvisak/VIctory/blob/35b054ec038c11bc8a0de66b1eee764b1ad4f101/README.md#status-2026-11-23)
 

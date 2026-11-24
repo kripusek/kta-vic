@@ -19,6 +19,7 @@ use windows::core::{Interface, PCWSTR, w};
 
 mod compositor;
 use compositor::Compositor;
+pub(crate) use compositor::PresentGeometry;
 
 /// Resource states without the console's own bits (compression hints from
 /// bit 25 up), which the host rejects.
@@ -1834,21 +1835,19 @@ type PresentationPlan<'a> = ((u32, u32), Option<Vec<compositor::Plane<'a>>>);
 fn plan_presentation<'a>(
     device: &ID3D12Device,
     primary: D3D12_RESOURCE_DESC,
-    planes: &[(&'a ID3D12Resource, u32)],
+    planes: &[compositor::PresentSource<'a>],
     compositor_ready: impl FnOnce() -> bool,
 ) -> Option<PresentationPlan<'a>> {
     let primary_size = (u32::try_from(primary.Width).ok()?, primary.Height);
-    if planes.len() > 1 {
+    if planes.len() > 1 || planes.first().is_some_and(|p| p.2 != PresentGeometry::default()) {
         if let Some(sampled) = compositor::prepare_planes(device, planes) {
             if compositor_ready() {
                 let extent =
                     sampled
                         .iter()
                         .skip(1)
-                        .fold(primary_size, |(w, h), (texture, _, _)| {
-                            // SAFETY: the prepared plane holds a live texture.
-                            let desc = unsafe { texture.GetDesc() };
-                            (w.max(desc.Width as u32), h.max(desc.Height))
+                        .fold(primary_size, |(w, h), plane| {
+                            (w.max(plane.size.0), h.max(plane.size.1))
                         });
                 return Some((extent, Some(sampled)));
             }
@@ -2016,7 +2015,7 @@ impl Host {
     /// builds, whether the frame was black.
     pub(crate) fn present(
         &self,
-        textures: &[std::sync::Arc<crate::resource::HostTexture>],
+        textures: &[(std::sync::Arc<crate::resource::HostTexture>, PresentGeometry)],
         frame: u64,
     ) -> Option<(bool, u32)> {
         // Trackers are read and GPU states restored entirely under the same
@@ -2024,9 +2023,9 @@ impl Host {
         let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
         let planes: Vec<_> = textures
             .iter()
-            .map(|host| (&host.texture, host.state.load(Ordering::Relaxed)))
+            .map(|(host, geometry)| (&host.texture, host.state.load(Ordering::Relaxed), *geometry))
             .collect();
-        let &(primary, primary_state) = planes.first()?;
+        let &(primary, primary_state, _) = planes.first()?;
         // SAFETY: live resources.
         let primary_desc = unsafe { primary.GetDesc() };
         let Some(format) = swap_format(primary_desc.Format) else {
@@ -2105,7 +2104,7 @@ impl Host {
             let list = &p.copy.list;
             let (capture, probe) = match composition.as_deref() {
                 None => {
-                    let (texture, state) = planes[0];
+                    let (texture, state, _) = planes[0];
                     let state = D3D12_RESOURCE_STATES(state as i32);
                     let mut before = Vec::with_capacity(2);
                     if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
