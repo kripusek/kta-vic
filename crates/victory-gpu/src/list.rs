@@ -300,7 +300,12 @@ pub(crate) struct Barrier {
 #[cfg(windows)]
 fn host_barrier(list: &crate::host::HostList, b: &Barrier) -> Option<Barrier> {
     use windows::core::Interface;
-    let host = |r: This| crate::resource::host_resource(r).map(|h| h.as_raw().cast_const().cast());
+    let host = |r: This| {
+        let texture = crate::resource::host_copy(r)?;
+        let resource: This = texture.texture.as_raw().cast_const().cast();
+        list.keep_barrier_texture(texture);
+        Some(resource)
+    };
     match b.kind {
         0 => {
             // A split barrier's first half: its second half transitions.

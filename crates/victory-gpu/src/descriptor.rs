@@ -56,7 +56,7 @@ pub(crate) struct Heap {
     /// descriptor order when a draw first uses them (decision 0007, step
     /// 3); slots written before wait in `pending`.
     #[cfg(windows)]
-    host: std::sync::OnceLock<Option<host::HostHeap>>,
+    host: std::sync::OnceLock<Option<std::sync::Arc<host::HostHeap>>>,
     #[cfg(windows)]
     pending: std::sync::Mutex<Vec<u32>>,
 }
@@ -76,7 +76,7 @@ impl Heap {
     /// Made late because a host view heap the size of Grand Theft Auto VI's
     /// costs over 100 MB of commit, which its boot needs for its page pool.
     #[cfg(windows)]
-    pub(crate) fn host(&self) -> Option<&host::HostHeap> {
+    pub(crate) fn host(&self) -> Option<&std::sync::Arc<host::HostHeap>> {
         if let Some(h) = self.host.get() {
             return h.as_ref();
         }
@@ -94,7 +94,7 @@ impl Heap {
                 for i in pending.drain(..) {
                     h.mirror(i, self.start + u64::from(i) * step, false);
                 }
-                Some(h)
+                Some(std::sync::Arc::new(h))
             })
             .as_ref()
     }
@@ -145,19 +145,6 @@ fn mirror(handle: u64) {
                 host.mirror(index, handle, false);
             }
         }
-    }
-}
-
-/// Gives back dynamic slots of the host heap behind the title heap at
-/// `heap`, if that heap still exists.
-#[cfg(windows)]
-pub(crate) fn release_dynamic(heap: usize, first: u32, n: u32) {
-    let heaps = SHADER_HEAPS.lock().unwrap_or_else(|e| e.into_inner());
-    if heaps.iter().any(|&(_, _, h)| h == heap)
-        // SAFETY: registered heaps are live (removed when dropped).
-        && let Some(Some(host)) = unsafe { &*(heap as *const Heap) }.host.get()
-    {
-        host.release(first, n);
     }
 }
 
@@ -707,6 +694,40 @@ mod tests {
         assert_eq!(increment_size(null, 9), 0);
         let bad = HeapDesc { kind: 9, ..desc };
         assert_eq!(create(bad, none, &mut h), E_INVALIDARG);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recorded_lists_hold_the_bound_heap_owner_until_reset_or_release() {
+        let Some(gpu) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let mut guest = std::ptr::null();
+        assert_eq!(
+            create(
+                HeapDesc { kind: VIEWS_KIND, count: 4, flags: SHADER_VISIBLE, nodes: 0 },
+                Placement { address: 0, size: 0 },
+                &mut guest,
+            ),
+            S_OK
+        );
+        let heap = heap(guest).host().unwrap();
+        let owner = std::sync::Arc::downgrade(heap);
+        let first = gpu.new_list().unwrap();
+        let second = gpu.new_list().unwrap();
+        for list in [&first, &second] {
+            list.bind_heaps([Some(heap), None]);
+            list.close();
+        }
+        let release = slot::<extern "system" fn(This) -> u32>(guest, 0x10);
+        assert_eq!(release(guest), 0);
+        assert_eq!(owner.strong_count(), 2);
+        assert_eq!(gpu.execute_checked(&[&first, &second]), None);
+        first.reset();
+        assert_eq!(owner.strong_count(), 1);
+        drop(second);
+        assert_eq!(owner.strong_count(), 0);
     }
 
     #[test]

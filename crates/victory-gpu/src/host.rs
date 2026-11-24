@@ -421,10 +421,14 @@ struct Deferred {
     /// Destination, source, bytes.
     copies: Vec<Step>,
     uploads: Vec<ID3D12Resource>,
-    /// Host objects the list's commands name (pipelines, root signatures,
-    /// descriptor heaps): the title may release its objects before it
-    /// submits the list.
+    /// Host objects the list's commands name (pipelines, root signatures).
+    /// The title may release its objects before it submits the list.
     kept: Vec<windows::core::IUnknown>,
+    /// Bound heaps own the resources in mirrored descriptors, including
+    /// slots chosen by shaders and invisible to CPU recording.
+    heaps: Vec<std::sync::Arc<crate::descriptor::host::HostHeap>>,
+    /// Textures named by aliasing and UAV barriers without a state transition.
+    barrier_textures: std::collections::HashMap<usize, std::sync::Arc<crate::resource::HostTexture>>,
     /// Buffer ranges refreshed since the last title copy (host copy,
     /// address, bytes): refreshing them again would find the same bytes.
     refreshed: std::collections::HashSet<(usize, usize, usize)>,
@@ -1208,6 +1212,25 @@ impl HostList {
         if let Ok(object) = object.cast::<windows::core::IUnknown>() {
             self.deferred().kept.push(object);
         }
+    }
+
+    /// Binds native descriptor heaps and keeps their slot owners until reset.
+    pub(crate) fn bind_heaps(
+        &self,
+        heaps: [Option<&std::sync::Arc<crate::descriptor::host::HostHeap>>; 2],
+    ) {
+        let native: Vec<_> = heaps.iter().flatten().map(|h| Some(h.heap.clone())).collect();
+        self.deferred().heaps.extend(heaps.into_iter().flatten().cloned());
+        // SAFETY: an open list and live shader-visible heaps.
+        unsafe { self.list.SetDescriptorHeaps(&native) };
+    }
+
+    /// Retains the host texture named by an aliasing or UAV barrier.
+    pub(crate) fn keep_barrier_texture(&self, texture: std::sync::Arc<crate::resource::HostTexture>) {
+        self.deferred()
+            .barrier_textures
+            .entry(std::sync::Arc::as_ptr(&texture) as usize)
+            .or_insert(texture);
     }
 
     /// Whether this is the first time since the reset that the list asks
