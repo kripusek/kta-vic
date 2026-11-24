@@ -350,6 +350,7 @@ mod tests {
         height: u32,
         state: D3D12_RESOURCE_STATES,
         flags: D3D12_RESOURCE_FLAGS,
+        format: DXGI_FORMAT,
     ) -> ID3D12Resource {
         let mut result = None;
         // SAFETY: output and descriptors live through this call.
@@ -367,7 +368,7 @@ mod tests {
                         Height: height,
                         DepthOrArraySize: 1,
                         MipLevels: 1,
-                        Format: FORMAT,
+                        Format: format,
                         SampleDesc: DXGI_SAMPLE_DESC {
                             Count: 1,
                             Quality: 0,
@@ -456,6 +457,53 @@ mod tests {
     }
 
     #[test]
+    fn warp_present_fallback_uses_the_primary_extent_when_copyable() {
+        let host = super::super::create_device(true).expect("software WARP host");
+        let texture_in = |width, height, format| {
+            texture(
+                &host.device,
+                width,
+                height,
+                D3D12_RESOURCE_STATE_COMMON,
+                D3D12_RESOURCE_FLAG_NONE,
+                format,
+            )
+        };
+        let base = texture_in(2, 3, FORMAT);
+        let overlay = texture_in(4, 5, FORMAT);
+        let integer_overlay = texture_in(6, 7, DXGI_FORMAT_R8G8B8A8_UINT);
+        // SAFETY: live primary texture.
+        let primary = unsafe { base.GetDesc() };
+        let planes = [(&base, 0), (&overlay, 0)];
+        let plan =
+            |ready| super::super::plan_presentation(&host.device, primary, &planes, || ready);
+        let (extent, composition) = plan(true).unwrap();
+        assert_eq!(extent, (4, 5));
+        assert!(composition.is_some());
+        let (extent, composition) = plan(false).unwrap();
+        assert_eq!(extent, (2, 3));
+        assert!(composition.is_none());
+
+        let invalid_planes = [(&base, 0), (&integer_overlay, 0)];
+        let (extent, composition) =
+            super::super::plan_presentation(&host.device, primary, &invalid_planes, || {
+                panic!("unsupported overlay should bypass compositor initialization")
+            })
+            .unwrap();
+        assert_eq!(extent, (2, 3));
+        assert!(composition.is_none());
+
+        let unsafe_copy = D3D12_RESOURCE_DESC {
+            MipLevels: 2,
+            ..primary
+        };
+        assert!(
+            super::super::plan_presentation(&host.device, unsafe_copy, &planes, || false,)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn warp_composites_scaled_planes_and_restores_sources() {
         let host = super::super::create_device(true).expect("software WARP host");
         let compositor = Compositor::new(&host.device, FORMAT).expect("compositor");
@@ -465,6 +513,7 @@ mod tests {
             2,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_FLAG_NONE,
+            FORMAT,
         );
         let overlay = texture(
             &host.device,
@@ -472,6 +521,7 @@ mod tests {
             4,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_FLAG_NONE,
+            FORMAT,
         );
         let back = texture(
             &host.device,
@@ -479,6 +529,7 @@ mod tests {
             4,
             D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            FORMAT,
         );
         let base_pixels = [
             [200, 0, 0, 255],

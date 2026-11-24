@@ -4,7 +4,7 @@
 //! shortcut: every submission is waited for, so CPU and GPU never overlap;
 //! overlap them with per-submission fences once more than clears run.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -57,7 +57,7 @@ pub(crate) struct Host {
     /// layer's messages.
     messages: Option<ID3D12InfoQueue>,
     next_rtv: AtomicU32,
-    presenter: Mutex<Option<Presenter>>,
+    presentation: Mutex<Presentation>,
 }
 
 // SAFETY: D3D12 devices, queues, fences and descriptor heaps are
@@ -294,7 +294,7 @@ fn create_device(warp: bool) -> windows::core::Result<Host> {
             next_dsv: AtomicU32::new(0),
             messages,
             next_rtv: AtomicU32::new(0),
-            presenter: Mutex::new(None),
+            presentation: Mutex::default(),
         })
     }
 }
@@ -1679,6 +1679,55 @@ fn swap_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
 
 const BUFFERS: u32 = 2;
 
+type PresentationPlan<'a> = ((u32, u32), Option<Vec<compositor::Plane<'a>>>);
+
+/// Select the drawing path before creating or resizing the swap chain.
+fn plan_presentation<'a>(
+    device: &ID3D12Device,
+    primary: D3D12_RESOURCE_DESC,
+    planes: &[(&'a ID3D12Resource, u32)],
+    compositor_ready: impl FnOnce() -> bool,
+) -> Option<PresentationPlan<'a>> {
+    let primary_size = (u32::try_from(primary.Width).ok()?, primary.Height);
+    if planes.len() > 1 {
+        if let Some(sampled) = compositor::prepare_planes(device, planes) {
+            if compositor_ready() {
+                let extent =
+                    sampled
+                        .iter()
+                        .skip(1)
+                        .fold(primary_size, |(w, h), (texture, _, _)| {
+                            // SAFETY: the prepared plane holds a live texture.
+                            let desc = unsafe { texture.GetDesc() };
+                            (w.max(desc.Width as u32), h.max(desc.Height))
+                        });
+                return Some((extent, Some(sampled)));
+            }
+        } else {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!("cannot sample these present planes; trying the primary plane");
+            }
+        }
+    }
+    // CopyResource needs a single 2D subresource matching the swap buffer.
+    let copyable = primary.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && primary.DepthOrArraySize == 1
+        && primary.MipLevels == 1
+        && primary.SampleDesc.Count == 1
+        && primary.SampleDesc.Quality == 0
+        && primary_size.0 != 0
+        && primary_size.1 != 0;
+    copyable.then_some((primary_size, None))
+}
+
+#[derive(Default)]
+struct Presentation {
+    presenter: Option<Presenter>,
+    compositor: Option<Compositor>,
+    failed_formats: Vec<DXGI_FORMAT>,
+}
+
 struct Presenter {
     swap_chain: IDXGISwapChain3,
     width: u32,
@@ -1687,7 +1736,6 @@ struct Presenter {
     copy: HostList,
     hwnd: HWND,
     meter: Meter,
-    compositor: Option<Compositor>,
 }
 
 /// The frame rate, shown in the window's caption every second and logged
@@ -1825,14 +1873,36 @@ impl Host {
             tracing::warn!(format = primary_desc.Format.0, "cannot present this format");
             return None;
         };
-        let (mut width, mut height) = (primary_desc.Width as u32, primary_desc.Height);
-        for &(tex, _) in &planes[1..] {
-            // SAFETY: live resource.
-            let d = unsafe { tex.GetDesc() };
-            width = width.max(d.Width as u32);
-            height = height.max(d.Height);
-        }
-        let mut presenter = self.presenter.lock().unwrap_or_else(|e| e.into_inner());
+        let mut presentation = self.presentation.lock().unwrap_or_else(|e| e.into_inner());
+        let Presentation {
+            presenter,
+            compositor,
+            failed_formats,
+        } = &mut *presentation;
+        let ((width, height), composition) = plan_presentation(
+            &self.device,
+            primary_desc,
+            planes,
+            || {
+                if compositor.as_ref().is_some_and(|c| c.format == format) {
+                    return true;
+                }
+                if failed_formats.contains(&format) {
+                    return false;
+                }
+                match Compositor::new(&self.device, format) {
+                    Ok(comp) => {
+                        *compositor = Some(comp);
+                        true
+                    }
+                    Err(e) => {
+                        failed_formats.push(format);
+                        tracing::warn!(error = %e, "no present compositor; trying the primary plane");
+                        false
+                    }
+                }
+            },
+        )?;
         if presenter.is_none() {
             *presenter = match self.presenter(width, height, format) {
                 Ok(p) => Some(p),
@@ -1857,24 +1927,6 @@ impl Host {
                 }
             }
         }
-        let composition = if planes.len() > 1 {
-            let Some(planes) = compositor::prepare_planes(&self.device, planes) else {
-                tracing::warn!("cannot sample these present planes");
-                return None;
-            };
-            if p.compositor.as_ref().is_none_or(|c| c.format != format) {
-                match Compositor::new(&self.device, format) {
-                    Ok(c) => p.compositor = Some(c),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "no present compositor");
-                        return None;
-                    }
-                }
-            }
-            Some((p.compositor.as_ref()?, planes))
-        } else {
-            None
-        };
         // SAFETY: our swap chain, list and live source textures.
         unsafe {
             let index = p.swap_chain.GetCurrentBackBufferIndex();
@@ -1883,74 +1935,83 @@ impl Host {
             };
             p.copy.reset();
             let list = &p.copy.list;
-            let (capture, probe) = if planes.len() == 1 {
-                let (texture, state) = planes[0];
-                let state = D3D12_RESOURCE_STATES(state as i32);
-                let mut before = Vec::with_capacity(2);
-                if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
-                    before.push(transition(texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE));
-                }
-                before.push(transition(
-                    &back,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                ));
-                list.ResourceBarrier(&before);
-                list.CopyResource(&back, texture);
-                #[cfg(feature = "diagnostics")]
-                let capture = crate::capture::wanted(frame)
-                    .then(|| crate::capture::read_back(&self.device, list, texture))
-                    .flatten();
-                #[cfg(feature = "diagnostics")]
-                let probe = crate::capture::probe(&self.device, list, texture);
-                #[cfg(not(feature = "diagnostics"))]
-                let (capture, probe) = {
-                    let _ = frame;
-                    (None::<()>, None::<()>)
-                };
-                let mut after = Vec::with_capacity(2);
-                if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
-                    after.push(transition(texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state));
-                }
-                after.push(transition(
-                    &back,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                    D3D12_RESOURCE_STATE_PRESENT,
-                ));
-                list.ResourceBarrier(&after);
-                (capture, probe)
-            } else {
-                let (comp, planes) = composition.as_ref().expect("prepared composition");
-                comp.record(&self.device, list, &back, D3D12_RESOURCE_STATE_PRESENT, planes);
-                #[cfg(feature = "diagnostics")]
-                let (capture, probe) = {
-                    list.ResourceBarrier(&[transition(
+            let (capture, probe) = match composition.as_deref() {
+                None => {
+                    let (texture, state) = planes[0];
+                    let state = D3D12_RESOURCE_STATES(state as i32);
+                    let mut before = Vec::with_capacity(2);
+                    if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                        before.push(transition(texture, state, D3D12_RESOURCE_STATE_COPY_SOURCE));
+                    }
+                    before.push(transition(
                         &back,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    )]);
+                        D3D12_RESOURCE_STATE_PRESENT,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                    ));
+                    list.ResourceBarrier(&before);
+                    list.CopyResource(&back, texture);
+                    #[cfg(feature = "diagnostics")]
                     let capture = crate::capture::wanted(frame)
-                        .then(|| crate::capture::read_back(&self.device, list, &back))
+                        .then(|| crate::capture::read_back(&self.device, list, texture))
                         .flatten();
-                    let probe = crate::capture::probe(&self.device, list, &back);
-                    list.ResourceBarrier(&[transition(
+                    #[cfg(feature = "diagnostics")]
+                    let probe = crate::capture::probe(&self.device, list, texture);
+                    #[cfg(not(feature = "diagnostics"))]
+                    let (capture, probe) = {
+                        let _ = frame;
+                        (None::<()>, None::<()>)
+                    };
+                    let mut after = Vec::with_capacity(2);
+                    if state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                        after.push(transition(texture, D3D12_RESOURCE_STATE_COPY_SOURCE, state));
+                    }
+                    after.push(transition(
                         &back,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
                         D3D12_RESOURCE_STATE_PRESENT,
-                    )]);
+                    ));
+                    list.ResourceBarrier(&after);
                     (capture, probe)
-                };
-                #[cfg(not(feature = "diagnostics"))]
-                let (capture, probe) = {
-                    let _ = frame;
-                    list.ResourceBarrier(&[transition(
+                }
+                Some(planes) => {
+                    let comp = compositor.as_ref().expect("prepared compositor");
+                    comp.record(
+                        &self.device,
+                        list,
                         &back,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
                         D3D12_RESOURCE_STATE_PRESENT,
-                    )]);
-                    (None::<()>, None::<()>)
-                };
-                (capture, probe)
+                        planes,
+                    );
+                    #[cfg(feature = "diagnostics")]
+                    let (capture, probe) = {
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        )]);
+                        let capture = crate::capture::wanted(frame)
+                            .then(|| crate::capture::read_back(&self.device, list, &back))
+                            .flatten();
+                        let probe = crate::capture::probe(&self.device, list, &back);
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_COPY_SOURCE,
+                            D3D12_RESOURCE_STATE_PRESENT,
+                        )]);
+                        (capture, probe)
+                    };
+                    #[cfg(not(feature = "diagnostics"))]
+                    let (capture, probe) = {
+                        let _ = frame;
+                        list.ResourceBarrier(&[transition(
+                            &back,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_PRESENT,
+                        )]);
+                        (None::<()>, None::<()>)
+                    };
+                    (capture, probe)
+                }
             };
             p.copy.close();
             self.execute(&[&p.copy]);
@@ -2010,7 +2071,6 @@ impl Host {
                 copy,
                 hwnd,
                 meter: Meter::new(),
-                compositor: None,
             })
         }
     }
