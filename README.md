@@ -4,7 +4,13 @@ VI Causeway is an experimental Windows compatibility layer for the Xbox Series X
 
 ## Startup status
 
-On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally and began loading the story. On the first world frames it exited with a null write before the pause menu appeared.
+On Windows 10 22H2 with an Intel Core i5-11600K and a GeForce RTX 3060 Ti, we verified the first-boot sequence for Xbox build `1.0.2.1`. Selecting the profile on the game's opening screen played the Rockstar Games animation with sound, then brought up the first-time settings and legal screens. The game saved the profile and settings locally and began loading the story. On a first-boot test the title's stall watchdog terminated the process during the first world frames. On a returning profile, the opening led directly to the illustrated story loading screens. A Menu button press reached the input layer, but the pause menu did not render during the test.
+
+In a release-build comparison on that machine, the opening movie ran at 30 fps. Reusing texture row spans reduced reported texture preparation from 14.8–15.7 to 3.1–3.4 ms per movie frame. A process-only audio capture matched the original soundtrack through its fade with no measurable accumulated delay.
+
+On a fresh profile, choose **Settings** at **Finish Setup?** with the controller Menu button or the **Esc** key. The game opens its seven-tab Settings menu before starting the story. We opened Control Scheme, Controller, Gameplay, and Display and used Back to return to setup.
+
+On this Windows 10 and NVIDIA system, a separate Series S trial presented black frames through the player-selection phase. The verified startup above used the Series X profile.
 
 Upstream VIctory separately reports reaching the first mission on Windows 11 with a Radeon RX 6700 XT. Its world frames were black and took 1.5–3 seconds to render. [Upstream test results](https://github.com/Marvisak/VIctory/blob/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f/README.md#status-2026-11-23)
 
@@ -26,6 +32,8 @@ Download Microsoft's `Microsoft.Direct3D.D3D12` NuGet package version `1.620.2` 
 VI Causeway is an independent derivative of VIctory by Marvisak and the VIctory contributors. This project began on 2026-11-23. The starting revision was `1dd7afd`. The imported history retains the original authors and co-author credits. Commit IDs changed where the history was filtered to omit the upstream BCPack table. The compatibility layer is licensed under GPL-3.0-or-later. [Original upstream revision](https://github.com/Marvisak/VIctory/tree/1dd7afd4e68300e5dea41cd33a6e0b297798bb2f) · [License](LICENSE)
 
 Two GPU fixes helped the startup sequence render on NVIDIA hardware. Nostyxx remapped descriptor tables that exceed the host heap limit. Ryx (Ryx69) kept shader resource views stable until the command list resets. [Nostyxx's heap fix](https://github.com/Marvisak/VIctory/pull/21) · [Ryx69's descriptor fix](https://github.com/Marvisak/VIctory/pull/20)
+
+The maintainer guide describes how this project imports later changes. [Updating from VIctory](docs/upstream.md)
 
 ## Getting started
 
@@ -53,6 +61,10 @@ Run the title with the executable you built. The executable and configuration re
 .\target\release\victory.exe run "D:\games\my-dump\game_scarlett_master.exe" --execute
 ```
 
+For a 60 Hz presentation target, append `--fps 60` to the `run` command. Omit the flag for the title's native timing, or use `--fps 30` to select 30 Hz. The option changes the timing of the console's standard 30/60 Hz frame requests for this launch. It preserves the save settings.
+
+On the i5-11600K and RTX 3060 Ti, the title submitted up to 60 frames per second on the player screen and during the opening movie. The video retains its original 30 fps content and the audio played at its original speed. The illustrated loading screen still presented at 30 fps. The world currently runs below either target.
+
 The window caption shows the framerate. Saves, settings and `crashes.log`
 are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
 data under the cache folder.
@@ -78,7 +90,7 @@ victory lib-exports <import.lib> [--list]
 victory shader-info [paths...] [--verbose] [--disasm]
 victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
 victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
-            [--console series-x|series-s] [-- <title arguments>]
+            [--console series-x|series-s] [--fps 30|60] [-- <title arguments>]
 victory config
 ```
 
