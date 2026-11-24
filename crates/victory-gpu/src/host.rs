@@ -63,6 +63,50 @@ unsafe impl Send for Host {}
 // SAFETY: as above.
 unsafe impl Sync for Host {}
 
+/// A host resource waiting to be dropped after in-flight GPU work finishes.
+struct Retired {
+    frame: u64,
+    #[allow(dead_code)]
+    resource: ID3D12Resource,
+}
+
+// SAFETY: D3D12 resources are free-threaded and may be released on any thread.
+unsafe impl Send for Retired {}
+
+/// Host resources retired on worker threads (for example when a descriptor
+/// slot is overwritten or a title resource is released while a submission is
+/// executing on the GPU). Kept alive for several presented frames because a
+/// single title frame spans many submissions and worker threads may record
+/// lists ahead of presentation.
+static RETIRED: Mutex<Vec<Retired>> = Mutex::new(Vec::new());
+
+/// Holds `resource` alive until several full frames have completed on the GPU.
+pub(crate) fn retire(resource: ID3D12Resource) {
+    let frame = crate::frame::current();
+    RETIRED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(Retired { frame, resource });
+}
+
+/// Takes retired resources old enough to drop once the current submission
+/// finishes on the GPU.
+fn take_retired() -> Vec<Retired> {
+    const KEEP_FRAMES: u64 = 6;
+    let now = crate::frame::current();
+    let mut guard = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut ready = Vec::new();
+    let mut i = 0;
+    while i < guard.len() {
+        if now.saturating_sub(guard[i].frame) >= KEEP_FRAMES {
+            ready.push(guard.swap_remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    ready
+}
+
 /// Time spent in submissions since the last frame-rate line, in
 /// microseconds: preparing them on the CPU (title memory copies, texture
 /// detiling), then waiting for the GPU.
@@ -477,6 +521,7 @@ impl Host {
             lists.push(list.list.cast().ok());
         }
         batch.flush();
+        let retired = take_retired();
         let prepared = std::time::Instant::now();
         // Diagnostics: each list on its own, timed (`VICTORY_GPU_TIMING`).
         #[cfg(feature = "diagnostics")]
@@ -541,6 +586,7 @@ impl Host {
                 last_notes(runs)
             ));
         }
+        drop(retired);
         // What shaders wrote goes back before the bottom-of-pipe writes,
         // which tell the title the GPU is done; each range once per
         // submission, however many dispatches declared it (the world's

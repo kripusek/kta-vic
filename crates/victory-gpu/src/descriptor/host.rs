@@ -32,6 +32,16 @@ pub(crate) struct HostHeap {
     next: Mutex<(u32, Vec<bool>)>,
 }
 
+impl Drop for HostHeap {
+    fn drop(&mut self) {
+        if let Ok(mut kept) = self.kept.lock() {
+            for res in kept.drain(..).flatten() {
+                crate::host::retire(res);
+            }
+        }
+    }
+}
+
 /// Host heaps' GPU ranges (start, bytes, bytes per slot, sampler), for
 /// device-removed reports: a shader indexing a heap past its end faults.
 static GPU_RANGES: Mutex<Vec<(u64, u64, u64, bool)>> = Mutex::new(Vec::new());
@@ -275,11 +285,17 @@ impl HostHeap {
         self.keep(index, None);
     }
 
-    /// Slot `index` now views `resource` (or nothing of the host's).
+    /// Slot `index` now views `resource` (or nothing of the host's). A
+    /// previously viewed resource is retired rather than dropped inline so an
+    /// in-flight GPU submission reading that slot cannot fault on freed memory.
     fn keep(&self, index: u32, resource: Option<ID3D12Resource>) {
-        let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(slot) = kept.get_mut(index as usize) {
-            *slot = resource;
+        let old = {
+            let mut kept = self.kept.lock().unwrap_or_else(|e| e.into_inner());
+            kept.get_mut(index as usize)
+                .and_then(|slot| std::mem::replace(slot, resource))
+        };
+        if let Some(old) = old {
+            crate::host::retire(old);
         }
     }
 
