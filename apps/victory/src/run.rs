@@ -12,6 +12,7 @@ pub fn run(
     execute: bool,
     console: Console,
     fps: Option<victory_hle::FrameRate>,
+    max_pipeline_workers: Option<std::num::NonZeroU8>,
 ) -> Result<()> {
     use std::sync::Arc;
     use victory_hle::{HleResolver, HostPolicy};
@@ -20,6 +21,9 @@ pub fn run(
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
     victory_hle::set_frame_rate_override(fps);
+    if let Some(limit) = max_pipeline_workers {
+        victory_hle::modules::d3d12x::limit_pipeline_workers(limit);
+    }
     let cfg = victory_core::Config::load()?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let mut prepared = victory_loader::prepare(&original)?;
@@ -353,6 +357,7 @@ pub fn run(
     _: bool,
     _: Console,
     _: Option<victory_hle::FrameRate>,
+    _: Option<std::num::NonZeroU8>,
 ) -> Result<()> {
     anyhow::bail!("running titles requires Windows")
 }

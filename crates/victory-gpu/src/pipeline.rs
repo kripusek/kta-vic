@@ -443,6 +443,9 @@ mod library;
 #[cfg(windows)]
 mod make;
 
+#[cfg(windows)]
+pub use make::limit_pipeline_workers;
+
 /// Keeps compiled host pipelines, and the list of title pipelines to start
 /// early, in `dir` (a folder of the cache) across runs.
 #[cfg(windows)]

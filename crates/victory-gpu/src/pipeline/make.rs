@@ -157,14 +157,28 @@ fn wait(p: &Pending, frame: u64) {
     WAITED_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
 }
 
-/// Hands `p` to the workers (half the logical processors, 2 to 8), started
+static WORKER_LIMIT: OnceLock<std::num::NonZeroU8> = OnceLock::new();
+
+/// Sets a ceiling on the background workers before the first pipeline is queued.
+pub fn limit_pipeline_workers(limit: std::num::NonZeroU8) {
+    let _ = WORKER_LIMIT.set(limit);
+}
+
+fn worker_count(logical_processors: usize, limit: Option<std::num::NonZeroU8>) -> usize {
+    let automatic = (logical_processors / 2).clamp(2, 8);
+    limit.map_or(automatic, |n| automatic.min(usize::from(n.get())))
+}
+
+/// Hands `p` to the workers (half the logical processors by default), started
 /// on first use.
 fn queue(p: Arc<Pending>) {
     static SENDER: OnceLock<std::sync::mpsc::Sender<Arc<Pending>>> = OnceLock::new();
     let sender = SENDER.get_or_init(|| {
         let (sender, receiver) = std::sync::mpsc::channel::<Arc<Pending>>();
         let receiver = Arc::new(Mutex::new(receiver));
-        let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 8));
+        let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = worker_count(logical, WORKER_LIMIT.get().copied());
+        tracing::info!(workers, "background pipeline compiler started");
         for i in 0..workers {
             let receiver = receiver.clone();
             let spawned = std::thread::Builder::new()
@@ -221,6 +235,14 @@ fn drained() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipeline_workers_respect_the_launch_ceiling() {
+        assert_eq!(worker_count(12, None), 6);
+        assert_eq!(worker_count(12, std::num::NonZeroU8::new(2)), 2);
+        assert_eq!(worker_count(1, std::num::NonZeroU8::new(1)), 1);
+        assert_eq!(worker_count(128, std::num::NonZeroU8::new(16)), 8);
+    }
 
     /// A first use queues the pipeline and, within the budget, gets the
     /// worker's answer (here: no host pipeline for no shaders).

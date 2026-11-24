@@ -112,6 +112,9 @@ enum Command {
         /// Omit to keep the title's requested intervals.
         #[arg(long)]
         fps: Option<victory_hle::FrameRate>,
+        /// Limit background pipeline compilation threads for this launch.
+        #[arg(long)]
+        max_pipeline_workers: Option<std::num::NonZeroU8>,
         /// Arguments for the title, after `--` (it reads the whole command
         /// line; a title that relaunches itself passes some).
         #[arg(last = true)]
@@ -172,8 +175,11 @@ fn main() -> Result<()> {
             execute,
             console,
             fps,
+            max_pipeline_workers,
             title_args: _,
-        } => run::run(&exe, unimplemented, strict, execute, console, fps),
+        } => run::run(
+            &exe, unimplemented, strict, execute, console, fps, max_pipeline_workers,
+        ),
         Command::Config => show_config(),
     }
 }
@@ -249,5 +255,22 @@ mod cli_tests {
             assert_eq!(fps, expected);
         }
         assert!(Cli::try_parse_from(["victory", "run", "game.exe", "--fps", "120"]).is_err());
+    }
+
+    #[test]
+    fn run_accepts_a_positive_pipeline_worker_limit_with_fps() {
+        let args = [
+            "victory", "run", "game.exe", "--max-pipeline-workers", "2", "--fps", "60",
+        ];
+        let Command::Run {
+            max_pipeline_workers, fps, ..
+        } = Cli::try_parse_from(args).unwrap().command
+        else {
+            panic!("expected run subcommand");
+        };
+        assert_eq!(max_pipeline_workers.map(|n| n.get()), Some(2));
+        assert_eq!(fps, Some(FrameRate::Fps60));
+        let zero = ["victory", "run", "game.exe", "--max-pipeline-workers", "0"];
+        assert!(Cli::try_parse_from(zero).is_err());
     }
 }

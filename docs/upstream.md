@@ -6,6 +6,10 @@ The next merge included pipeline compilation on worker threads, a persistent D3D
 
 Causeway subsequently picked up Yaekai's patches for null buffer descriptors and the `v_swap_b32` and `v_xnor_b32` shader instructions. Both instructions appeared in world compute shaders on the RTX 3060 Ti. [Upstream PR 57](https://github.com/Marvisak/VIctory/pull/57) · [Upstream PR 58](https://github.com/Marvisak/VIctory/pull/58)
 
+We also tested upstream's wave-size changes against four compute pipelines that the RTX 3060 Ti refused during story loading. All four translated shaders passed DXIL validation. The device accepted the 32-thread pipeline after the change. The three larger pipelines still required 64 lanes and the driver refused them. [Upstream PR 54](https://github.com/Marvisak/VIctory/pull/54)
+
+Two 2560×1440 packed render targets failed to allocate on the same machine. Henrique Bueno's format fallback let the RTX create both in RGBA8 in a native resource test. Causeway also checks copy and resolve compatibility before recording GPU commands. Copies that require conversion between packed guest texels and RGBA8 are still unsupported. [Upstream PR 89](https://github.com/Marvisak/VIctory/pull/89)
+
 Work in a fresh, single-branch clone of upstream for each refresh. Keep that clone separate from the VI Causeway checkout. Its BCPack table is excluded from the upstream license. VI Causeway reads a user-supplied copy at runtime.
 
 1. Clone upstream main with `--no-tags --single-branch --branch main`. Record the upstream commit ID.

@@ -67,6 +67,8 @@ For a 60 Hz presentation target, append `--fps 60` to the `run` command. Omit th
 
 On the i5-11600K and RTX 3060 Ti, the title submitted up to 60 frames per second on the player screen and during the opening movie. The video retains its original 30 fps content and the audio played at its original speed. The illustrated loading screen still presented at 30 fps. The world currently runs below either target.
 
+To leave more CPU time for other applications while the driver compiles new pipelines, append `--max-pipeline-workers 2`. The i5-11600K normally uses six background compilation threads. A lower limit can take longer to fill the cache. You can combine it with `--fps 60`.
+
 The window caption shows the framerate. Saves, settings and `crashes.log`
 are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
 data under the cache folder.
@@ -92,7 +94,8 @@ victory lib-exports <import.lib> [--list]
 victory shader-info [paths...] [--verbose] [--disasm]
 victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
 victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
-            [--console series-x|series-s] [--fps 30|60] [-- <title arguments>]
+            [--console series-x|series-s] [--fps 30|60] [--max-pipeline-workers N]
+            [-- <title arguments>]
 victory config
 ```
 
