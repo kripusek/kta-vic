@@ -40,6 +40,8 @@ pub enum Atom {
     Lane(Value),
     /// An SCC value, the same in every lane.
     Uniform(Value),
+    /// Outcome of a scalar branch, shared by all lanes in the wave.
+    WaveBranch(usize),
     /// A lane mask joined at a block entry, by its low dword's phi.
     Phi(Value),
     /// `s_wqm` result: some lane of the quad is in the source mask.
@@ -421,6 +423,7 @@ struct Lanes<'a> {
     first: Vec<Bool>,
     /// Per block ending in a branch: when a lane takes it.
     when: Vec<Option<Bool>>,
+    wave_edges: Option<Vec<(Bool, Bool)>>,
     /// See [`Structured::active`].
     active: HashSet<Value>,
 }
@@ -486,6 +489,7 @@ impl<'a> Lanes<'a> {
             joins: Vec::new(),
             first: vec![Bool::FALSE; blocks.len()],
             when: vec![None; blocks.len()],
+            wave_edges: None,
             active: HashSet::new(),
         })
     }
@@ -499,6 +503,9 @@ impl<'a> Lanes<'a> {
         self.joins.clear();
         self.first.fill(Bool::FALSE);
         self.when.fill(None);
+        if let Some(edges) = &mut self.wave_edges {
+            edges.fill((Bool::TRUE, Bool::TRUE));
+        }
         self.active.clear();
     }
 
@@ -551,7 +558,28 @@ impl<'a> Lanes<'a> {
             if let Exit::Branch { .. } = p.blocks[b].exit
                 && let Some(last) = p.blocks[b].insts.last()
             {
-                self.when[b] = Some(self.branch(last));
+                if self.wave_edges.is_some() {
+                    let taken = self.b.atom(Atom::WaveBranch(b), n);
+                    let not_taken = self.b.not(taken);
+                    let mut edges = (taken, not_taken);
+                    // An empty EXEC proves this lane is inactive. A nonempty
+                    // EXEC can contain this lane or some other lane.
+                    if matches!(last.name(), "s_cbranch_execz" | "s_cbranch_execnz")
+                        && let Some(key) = self.key(|r| last.read(r), EXEC)
+                    {
+                        let exec = self.mask(key).0;
+                        let inactive = self.b.not(exec);
+                        if last.name() == "s_cbranch_execz" {
+                            edges.0 = self.b.and(taken, inactive);
+                        } else {
+                            edges.1 = self.b.and(not_taken, inactive);
+                        }
+                    }
+                    self.wave_edges.as_mut().unwrap()[b] = edges;
+                    self.when[b] = Some(taken);
+                } else {
+                    self.when[b] = Some(self.branch(last));
+                }
             }
         }
         execs
@@ -559,6 +587,10 @@ impl<'a> Lanes<'a> {
 
     /// `c` narrowed by the branch at the end of `q` towards one successor.
     fn edge(&mut self, c: Bool, q: usize, taken: bool) -> Bool {
+        if let Some(edges) = &self.wave_edges {
+            let (yes, no) = edges[q];
+            return self.b.and(c, if taken { yes } else { no });
+        }
         match self.when[q] {
             Some(w) if taken => self.b.and(c, w),
             Some(w) => {
@@ -1455,3 +1487,5 @@ mod tests {
         }
     }
 }
+
+pub(crate) mod sampler_proof;

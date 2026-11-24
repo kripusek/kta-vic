@@ -276,10 +276,39 @@ fn translate_target(
             what: "a container without a vertex, pixel, compute or mesh program",
         })?;
     let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
-    let res = resource::track(&p, &native.layout, native.stage)?;
-    let io = io::raise(&p, &native)?;
-    let st = structure::structure(&p)?;
-    emit_target(&c, &native, &p, &st, &io, &res, host_waves, options)
+    match resource::track(&p, &native.layout, native.stage) {
+        Ok(res) => emit_tracked(&c, &native, &p, &res, host_waves, options),
+        Err(
+            original @ ShaderError::Unsupported {
+                offset,
+                what: "a descriptor neither loaded nor built",
+            },
+        ) => {
+            let Some(native) = structure::sampler_proof::retry_mesh(&native, &p, offset) else {
+                return Err(original);
+            };
+            let retry = (|| {
+                let p = ir::build(&native.code, native.wave64, native.vgprs)?;
+                let res = resource::track(&p, &native.layout, native.stage)?;
+                emit_tracked(&c, &native, &p, &res, host_waves, options)
+            })();
+            retry.map_err(|_| original)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn emit_tracked(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    res: &resource::Resources,
+    host_waves: Option<WaveRange>,
+    options: TranslateOptions,
+) -> Result<HostShader, ShaderError> {
+    let io = io::raise(p, native)?;
+    let st = structure::structure(p)?;
+    emit_target(c, native, p, &st, &io, res, host_waves, options)
 }
 
 /// Emits a program whose earlier stages already ran (falling back to the
