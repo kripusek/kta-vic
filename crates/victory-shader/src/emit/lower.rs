@@ -61,22 +61,23 @@ enum Stop {
     Fail(ShaderError),
 }
 
+const NONLOCAL_MASK: Why = "a lane mask holding lanes elsewhere read as data";
 const UNTRACKED_SELECT: Why = "a select on an untracked mask";
 
 pub(crate) fn lower(parts: &Parts) -> Result<Lowered, ShaderError> {
     match lower_program(parts, false) {
         Err(ShaderError::Unsupported {
-            what: UNTRACKED_SELECT,
+            what: UNTRACKED_SELECT | NONLOCAL_MASK,
             ..
         }) if parts.native.stage == HwStage::Cs => lower_program(parts, true),
         result => result,
     }
 }
 
-fn lower_program(parts: &Parts, numeric_selects: bool) -> Result<Lowered, ShaderError> {
+fn lower_program(parts: &Parts, numeric_masks: bool) -> Result<Lowered, ShaderError> {
     let mut bad = HashMap::new();
     loop {
-        match Lower::new(parts, &bad, numeric_selects).run() {
+        match Lower::new(parts, &bad, numeric_masks).run() {
             Ok(l) => return Ok(l),
             Err(Stop::Retry(v, why)) => {
                 if bad.insert(v, why).is_some() {
@@ -186,7 +187,7 @@ struct Lower<'a> {
     /// lanes, so lane n is console lane n.
     console_lanes: bool,
     /// Retry live numeric selects after an otherwise unsupported compute select.
-    numeric_selects: bool,
+    numeric_masks: bool,
     /// Wave64 compute lowering mode (`Native` when not a Wave64 compute shader).
     wave64: Wave64Mode,
     /// Compute thread count per group (0 outside compute).
@@ -325,6 +326,16 @@ fn reads_mask_as_data(st: &Structured, i: &Inst) -> bool {
         Operand::Scalar { code, .. } if code != NULL => i.read(Reg::S(code)).is_some_and(is_mask),
         _ => false,
     })
+}
+
+/// A scalar bitwise result may include bits for lanes outside the defining
+/// block. Recover that number from the original operands instead of balloting
+/// the lanes that happen to reach its definition.
+fn numeric_mask_alu(st: &Structured, inst: &Inst) -> bool {
+    matches!(inst.name(), "s_and_b32" | "s_or_b32" | "s_xor_b32" | "s_andn2_b32"
+        | "s_orn2_b32" | "s_nand_b32" | "s_nor_b32" | "s_xnor_b32")
+        && inst.writes.iter().any(|&(reg, v)| matches!(reg, Reg::S(_))
+            && st.masks.contains_key(&v) && !st.active.contains(&v))
 }
 
 /// A select that needs the actual scalar mask words and console lane index.
@@ -954,7 +965,7 @@ fn operand_const_lane(op: &Operand) -> Option<u32> {
 }
 
 impl<'a> Lower<'a> {
-    fn new(x: &'a Parts<'a>, bad: &'a HashMap<Value, Why>, numeric_selects: bool) -> Self {
+    fn new(x: &'a Parts<'a>, bad: &'a HashMap<Value, Why>, numeric_masks: bool) -> Self {
         let p = x.p;
         let mut phi_at = HashMap::new();
         for (b, block) in p.blocks.iter().enumerate() {
@@ -1022,7 +1033,7 @@ impl<'a> Lower<'a> {
                         || matches!(n, "v_readlane_b32" | "v_writelane_b32")
                         || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
                         || reads_mask_as_data(x.st, i)
-                        || numeric_selects && numeric_select(x.st, i)
+                        || numeric_masks && (numeric_select(x.st, i) || numeric_mask_alu(x.st, i))
                 })
             }) || {
                 // Masks held as numbers or constant lane sets: the lane
@@ -1250,7 +1261,7 @@ impl<'a> Lower<'a> {
             writes_uavs,
             src0: None,
             console_lanes,
-            numeric_selects,
+            numeric_masks,
             wave64,
             total_threads,
             title_lds_dwords,
@@ -1783,7 +1794,7 @@ impl<'a> Lower<'a> {
     fn compute_ballot_in_cur(&mut self, lo: Value, uniform_here: bool) -> Result<(V, V), Why> {
         let &m = self.x.st.masks.get(&lo).ok_or(LANE_MASK)?;
         if !self.x.st.active.contains(&lo) {
-            return Err("a lane mask holding lanes elsewhere read as data");
+            return Err(NONLOCAL_MASK);
         }
         let c = self.cur;
         if !self.balloting.insert(lo) {
@@ -2475,7 +2486,7 @@ impl<'a> Lower<'a> {
                 } else {
                     let &m = self.x.st.masks.get(&lo).ok_or(LANE_MASK)?;
                     if !self.x.st.active.contains(&lo) {
-                        return Err("a lane mask holding lanes elsewhere read as data");
+                        return Err(NONLOCAL_MASK);
                     }
                     let at = match self.def_block.get(&lo) {
                         // Program inputs (EXEC on entry).
@@ -2948,7 +2959,7 @@ impl<'a> Lower<'a> {
         if code == NULL {
             return Ok(self.s.m.bool(false));
         }
-        if !self.numeric_selects || !self.console_lanes {
+        if !self.numeric_masks || !self.console_lanes {
             return Err(UNTRACKED_SELECT);
         }
         // A scalar operation can define either dword independently. The SSA
@@ -3625,7 +3636,9 @@ impl<'a> Lower<'a> {
             _ => None,
         };
         let lo = dst_code.and_then(|c| inst.write(Reg::S(c)));
-        if inst.write(Reg::S(EXEC)).is_some() || self.is_mask(lo) {
+        if inst.write(Reg::S(EXEC)).is_some()
+            || self.is_mask(lo) && !(self.numeric_masks && numeric_mask_alu(self.x.st, inst))
+        {
             return Err(LANE_MASK);
         }
         if matches!(
