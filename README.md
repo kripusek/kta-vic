@@ -14,7 +14,7 @@ Checking for writes to mapped guest memory was one CPU cost during world renderi
 
 On a fresh profile, choose **Settings** at **Finish Setup?** with the controller Menu button or the **Esc** key. The game opens its seven-tab Settings menu before starting the story. We opened Control Scheme, Controller, Gameplay, and Display and used Back to return to setup.
 
-The verified startup above used the Series X profile. The latest offline Series S run produced 71 black presented readbacks before player selection. The compositor fell back to the primary plane when it encountered a cropped or positioned plane. Causeway now applies source crops and destination placement when composing the scene and UI. An offscreen WARP test verified crop edges, placement, alpha blending, and layer order with 1080p and 4K planes. The updated path still needs a Series S title run. [Upstream Series S compositor](https://github.com/Marvisak/VIctory/pull/211)
+The offline Series S run reached the Player picker on the RTX 3060 Ti. This confirms the picker renders with the Series S profile. Story gameplay on Series S remains unverified. An offscreen WARP test verified crop edges, placement, alpha blending, and layer order with 1080p and 4K planes. [Upstream Series S compositor](https://github.com/Marvisak/VIctory/pull/211)
 
 On Windows 11 with a Radeon RX 6700 XT, upstream's pipeline-cache update rendered the first mission's title card. The following scene remained dark and ran at 0.5–1.8 seconds per frame. [Upstream test results](https://github.com/Marvisak/VIctory/blob/35b054ec038c11bc8a0de66b1eee764b1ad4f101/README.md#status-2026-11-23)
 
@@ -69,6 +69,8 @@ For a 60 Hz presentation target, append `--fps 60` to the `run` command. Omit th
 
 On the i5-11600K and RTX 3060 Ti, the title submitted up to 60 frames per second on the player screen and during the opening movie. The video retains its original 30 fps content and the audio played at its original speed. The illustrated loading screen still presented at 30 fps. The world currently runs below either target.
 
+Add `--output-height 1080` to cap the host backbuffer at 1080p, or use `--output-height 720` for testing. Launchers can set the default with `VICTORY_OUTPUT_HEIGHT`, and an explicit flag takes precedence. Causeway preserves the presentation aspect ratio, crops, placement, and blending without changing the title's render targets. If it cannot sample the primary plane or initialize the compositor, it logs the fallback and copies the primary at its native size when the resources match.
+
 To leave more CPU time for other applications while the driver compiles new pipelines, append `--max-pipeline-workers 2`. The i5-11600K normally uses six background compilation threads. A lower limit can take longer to fill the cache. You can combine it with `--fps 60`.
 
 The window caption shows the framerate. Saves, settings and `crashes.log`
@@ -96,7 +98,7 @@ victory lib-exports <import.lib> [--list]
 victory shader-info [paths...] [--verbose] [--disasm]
 victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
 victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
-            [--console series-x|series-s] [--fps 30|60] [--max-pipeline-workers N]
+            [--console series-x|series-s] [--fps 30|60] [--output-height HEIGHT] [--max-pipeline-workers N]
             [-- <title arguments>]
 victory config
 ```

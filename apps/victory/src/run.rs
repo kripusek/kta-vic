@@ -12,6 +12,7 @@ pub fn run(
     execute: bool,
     console: Console,
     fps: Option<victory_hle::FrameRate>,
+    output_height: Option<std::num::NonZeroU32>,
     max_pipeline_workers: Option<std::num::NonZeroU8>,
 ) -> Result<()> {
     use std::sync::Arc;
@@ -21,6 +22,9 @@ pub fn run(
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
     victory_hle::set_frame_rate_override(fps);
+    let output_height =
+        resolve_output_height(output_height, std::env::var("VICTORY_OUTPUT_HEIGHT"))?;
+    victory_hle::modules::d3d12x::set_output_height(output_height);
     if let Some(limit) = max_pipeline_workers {
         victory_hle::modules::d3d12x::limit_pipeline_workers(limit);
     }
@@ -349,6 +353,25 @@ mod tests {
     }
 }
 
+#[cfg(any(windows, test))]
+pub(crate) fn resolve_output_height(
+    argument: Option<std::num::NonZeroU32>,
+    environment: Result<String, std::env::VarError>,
+) -> Result<Option<std::num::NonZeroU32>> {
+    if argument.is_some() {
+        return Ok(argument);
+    }
+    match environment {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        other => {
+            let text = other.context("reading VICTORY_OUTPUT_HEIGHT")?;
+            text.parse()
+                .map(Some)
+                .context("VICTORY_OUTPUT_HEIGHT must be a positive integer")
+        }
+    }
+}
+
 #[cfg(not(windows))]
 pub fn run(
     _: &Path,
@@ -357,6 +380,7 @@ pub fn run(
     _: bool,
     _: Console,
     _: Option<victory_hle::FrameRate>,
+    _: Option<std::num::NonZeroU32>,
     _: Option<std::num::NonZeroU8>,
 ) -> Result<()> {
     anyhow::bail!("running titles requires Windows")

@@ -1829,6 +1829,28 @@ fn swap_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
 
 const BUFFERS: u32 = 2;
 
+static OUTPUT_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Sets the host presentation height limit for this launch. This does not
+/// change the title's output mode or the sizes of its render targets.
+pub fn set_output_height(height: Option<std::num::NonZeroU32>) {
+    OUTPUT_HEIGHT.store(
+        height.map_or(0, std::num::NonZeroU32::get),
+        Ordering::Relaxed,
+    );
+}
+
+fn cap_extent((width, height): (u32, u32), limit: Option<std::num::NonZeroU32>) -> (u32, u32) {
+    let Some(limit) = limit
+        .map(std::num::NonZeroU32::get)
+        .filter(|&limit| limit < height)
+    else {
+        return (width, height);
+    };
+    let scale = (u64::from(width) * u64::from(limit) + u64::from(height / 2)) / u64::from(height);
+    (scale.max(1) as u32, limit)
+}
+
 type PresentationPlan<'a> = ((u32, u32), Option<Vec<compositor::Plane<'a>>>);
 
 /// Select the drawing path before creating or resizing the swap chain.
@@ -1836,25 +1858,44 @@ fn plan_presentation<'a>(
     device: &ID3D12Device,
     primary: D3D12_RESOURCE_DESC,
     planes: &[compositor::PresentSource<'a>],
+    limit: Option<std::num::NonZeroU32>,
     compositor_ready: impl FnOnce() -> bool,
 ) -> Option<PresentationPlan<'a>> {
     let primary_size = (u32::try_from(primary.Width).ok()?, primary.Height);
-    if planes.len() > 1 || planes.first().is_some_and(|p| p.2 != PresentGeometry::default()) {
-        if let Some(sampled) = compositor::prepare_planes(device, planes) {
-            if compositor_ready() {
-                let extent =
-                    sampled
-                        .iter()
-                        .skip(1)
-                        .fold(primary_size, |(w, h), plane| {
-                            (w.max(plane.size.0), h.max(plane.size.1))
-                        });
-                return Some((extent, Some(sampled)));
-            }
-        } else {
+    let capped_primary = cap_extent(primary_size, limit);
+    if capped_primary != primary_size
+        || planes.len() > 1
+        || planes
+            .first()
+            .is_some_and(|p| p.2 != PresentGeometry::default())
+    {
+        let sampled = compositor::prepare_planes(device, planes).or_else(|| {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
                 tracing::warn!("cannot sample these present planes; trying the primary plane");
+            }
+            if planes.len() > 1 && capped_primary != primary_size {
+                compositor::prepare_planes(device, &planes[..1])
+            } else {
+                None
+            }
+        });
+        if let Some(sampled) = sampled
+            && compositor_ready()
+        {
+            let extent = sampled.iter().skip(1).fold(primary_size, |(w, h), plane| {
+                (w.max(plane.size.0), h.max(plane.size.1))
+            });
+            return Some((cap_extent(extent, limit), Some(sampled)));
+        }
+        if capped_primary != primary_size {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    requested_height = capped_primary.1,
+                    primary_height = primary_size.1,
+                    "output height limit unavailable; trying the native primary plane"
+                );
             }
         }
     }
@@ -2042,6 +2083,7 @@ impl Host {
             &self.device,
             primary_desc,
             &planes,
+            std::num::NonZeroU32::new(OUTPUT_HEIGHT.load(Ordering::Relaxed)),
             || {
                 if compositor.as_ref().is_some_and(|c| c.format == format) {
                     return true;
@@ -2105,6 +2147,20 @@ impl Host {
             let (capture, probe) = match composition.as_deref() {
                 None => {
                     let (texture, state, _) = planes[0];
+                    let back_desc = back.GetDesc();
+                    if back_desc.Width != primary_desc.Width
+                        || back_desc.Height != primary_desc.Height
+                        || back_desc.Dimension != primary_desc.Dimension
+                        || back_desc.DepthOrArraySize != primary_desc.DepthOrArraySize
+                        || back_desc.MipLevels != primary_desc.MipLevels
+                        || back_desc.SampleDesc != primary_desc.SampleDesc
+                        || swap_format(back_desc.Format) != Some(format)
+                    {
+                        tracing::warn!(
+                            "primary plane and swap buffer do not match; skipping presentation copy"
+                        );
+                        return None;
+                    }
                     let state = D3D12_RESOURCE_STATES(state as i32);
                     let mut before = Vec::with_capacity(2);
                     if state != D3D12_RESOURCE_STATE_COPY_SOURCE {

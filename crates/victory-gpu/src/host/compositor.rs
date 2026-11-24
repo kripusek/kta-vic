@@ -591,7 +591,7 @@ mod tests {
         let planes = [(&base, 0), (&overlay, 0)]
             .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let plan =
-            |ready| super::super::plan_presentation(&host.device, primary, &planes, || ready);
+            |ready| super::super::plan_presentation(&host.device, primary, &planes, None, || ready);
         let (extent, composition) = plan(true).unwrap();
         assert_eq!(extent, (4, 5));
         assert!(composition.is_some());
@@ -602,11 +602,29 @@ mod tests {
         let invalid_planes = [(&base, 0), (&integer_overlay, 0)]
             .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let (extent, composition) =
-            super::super::plan_presentation(&host.device, primary, &invalid_planes, || {
+            super::super::plan_presentation(&host.device, primary, &invalid_planes, None, || {
                 panic!("unsupported overlay should bypass compositor initialization")
             })
             .unwrap();
         assert_eq!(extent, (2, 3));
+        assert!(composition.is_none());
+
+        let cap = std::num::NonZeroU32::new(2);
+        let (extent, composition) =
+            super::super::plan_presentation(&host.device, primary, &invalid_planes, cap, || true)
+                .unwrap();
+        assert_eq!(extent, (1, 2));
+        assert_eq!(composition.unwrap().len(), 1);
+
+        let unsampleable = [(&integer_overlay, 0, PresentGeometry::default())];
+        // SAFETY: live integer source texture.
+        let integer_desc = unsafe { integer_overlay.GetDesc() };
+        let (extent, composition) =
+            super::super::plan_presentation(&host.device, integer_desc, &unsampleable, cap, || {
+                panic!("unsampleable plane should bypass compositor initialization")
+            })
+            .unwrap();
+        assert_eq!(extent, (6, 7));
         assert!(composition.is_none());
 
         let unsafe_copy = D3D12_RESOURCE_DESC {
@@ -614,7 +632,7 @@ mod tests {
             ..primary
         };
         assert!(
-            super::super::plan_presentation(&host.device, unsafe_copy, &planes, || false,)
+            super::super::plan_presentation(&host.device, unsafe_copy, &planes, None, || false,)
                 .is_none()
         );
     }
@@ -855,7 +873,6 @@ mod tests {
         let rt = D3D12_RESOURCE_STATE_RENDER_TARGET;
         let base = target(1920, 1080, rt);
         let overlay = target(3840, 2160, rt);
-        let back = target(3840, 2160, D3D12_RESOURCE_STATE_COMMON);
         let run = host.new_list().unwrap();
         let list = &run.list;
         let crop = RECT {
@@ -907,64 +924,131 @@ mod tests {
                 },
             ),
         ];
+        let cases = [
+            (None, (3840, 2160)),
+            (Some(1080), (1920, 1080)),
+            (Some(720), (1280, 720)),
+        ];
+        let mut captures = Vec::new();
+        for (cap, expected) in cases {
+            // SAFETY: the primary source is live.
+            let ((width, height), planes) = super::super::plan_presentation(
+                &host.device,
+                unsafe { base.GetDesc() },
+                &input,
+                cap.and_then(std::num::NonZeroU32::new),
+                || true,
+            )
+            .expect("presentation plan");
+            assert_eq!((width, height), expected);
+            let back = target(width, height, D3D12_RESOURCE_STATE_COMMON);
+            comp.record(
+                &host.device,
+                list,
+                &back,
+                D3D12_RESOURCE_STATE_COMMON,
+                &planes.unwrap(),
+            );
+            // SAFETY: the compositor leaves the destination in render-target state.
+            unsafe {
+                list.ResourceBarrier(&[transition(&back, rt, D3D12_RESOURCE_STATE_COPY_SOURCE)])
+            };
+            let (readback, layout) = crate::capture::read_back(&host.device, list, &back).unwrap();
+            assert_eq!((layout.Footprint.Width, layout.Footprint.Height), expected);
+            captures.push((back, readback, layout, width, height));
+            // The compositor reuses shader-visible slots, so submit before
+            // recording another composite that could change these descriptors.
+            run.close();
+            assert_eq!(host.execute_checked(&[&run]), None);
+            run.reset();
+        }
+        let single = [(&base, rt.0 as u32, PresentGeometry::default())];
         // SAFETY: the primary source is live.
-        let ((width, height), planes) = super::super::plan_presentation(
+        let ((width, height), single) = super::super::plan_presentation(
             &host.device,
             unsafe { base.GetDesc() },
-            &input,
+            &single,
+            std::num::NonZeroU32::new(720),
             || true,
         )
-        .expect("presentation plan");
-        assert_eq!((width, height), (3840, 2160));
+        .expect("single-plane downscale plan");
+        assert_eq!((width, height), (1280, 720));
+        let single_back = target(width, height, D3D12_RESOURCE_STATE_COMMON);
         comp.record(
             &host.device,
             list,
-            &back,
+            &single_back,
             D3D12_RESOURCE_STATE_COMMON,
-            &planes.unwrap(),
+            &single.unwrap(),
         );
-        // SAFETY: the compositor leaves the destination in render-target state.
+        // SAFETY: render-target transition for the final readback.
         unsafe {
-            list.ResourceBarrier(&[transition(&back, rt, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
-        }
-        let (readback, layout) = crate::capture::read_back(&host.device, list, &back).unwrap();
+            list.ResourceBarrier(&[transition(
+                &single_back,
+                rt,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )])
+        };
+        let (single_readback, single_layout) =
+            crate::capture::read_back(&host.device, list, &single_back).unwrap();
+        assert_eq!(
+            (
+                single_layout.Footprint.Width,
+                single_layout.Footprint.Height
+            ),
+            (1280, 720)
+        );
         run.close();
         assert_eq!(host.execute_checked(&[&run]), None);
         let black = [0u8, 0, 0, 255];
         let green = [0, 128, 0, 255];
         let blue_over_green = [0, 64, 128, 255];
         let red_over_blue = [128, 32, 64, 255];
-        let checks = [
-            (0u32, 269u32, black),
-            (0, 270, green),
-            (959, 540, green),
-            (960, 539, green),
-            (960, 540, blue_over_green),
-            (2879, 1619, blue_over_green),
-            (2880, 1619, green),
-            (2879, 1620, green),
-            (1919, 1080, blue_over_green),
-            (1920, 1080, red_over_blue),
-            (2399, 1349, red_over_blue),
-            (2400, 1349, blue_over_green),
-            (2399, 1350, blue_over_green),
-        ];
-        // SAFETY: submission completed and every sample is inside the mapped footprint.
+        // SAFETY: read back the first and last pixels of the full single plane.
         unsafe {
             let mut data = std::ptr::null_mut();
-            readback.Map(0, None, Some(&mut data)).unwrap();
-            for (x, y, expected) in checks {
-                let at = layout.Offset as usize + (y * layout.Footprint.RowPitch + x * 4) as usize;
-                let actual = data.cast::<u8>().add(at).cast::<[u8; 4]>().read();
-                assert!(
-                    actual
-                        .into_iter()
-                        .zip(expected)
-                        .all(|(a, e)| a.abs_diff(e) <= 1),
-                    "pixel ({x}, {y}) was {actual:?}, expected {expected:?}"
-                );
+            single_readback.Map(0, None, Some(&mut data)).unwrap();
+            for (x, y) in [(0, 0), (width - 1, height - 1)] {
+                let at = single_layout.Offset as usize
+                    + (y * single_layout.Footprint.RowPitch + x * 4) as usize;
+                assert_eq!(data.cast::<u8>().add(at).cast::<[u8; 4]>().read(), green);
             }
-            readback.Unmap(0, None);
+            single_readback.Unmap(0, None);
+        }
+        for (_, readback, layout, w, h) in captures {
+            let checks = [
+                (0, h / 8 - 1, black),
+                (0, h / 8, green),
+                (w / 4 - 1, h / 4, green),
+                (w / 4, h / 4 - 1, green),
+                (w / 4, h / 4, blue_over_green),
+                (w * 3 / 4 - 1, h * 3 / 4 - 1, blue_over_green),
+                (w * 3 / 4, h * 3 / 4 - 1, green),
+                (w * 3 / 4 - 1, h * 3 / 4, green),
+                (w / 2 - 1, h / 2, blue_over_green),
+                (w / 2, h / 2, red_over_blue),
+                (w * 5 / 8 - 1, h * 5 / 8 - 1, red_over_blue),
+                (w * 5 / 8, h * 5 / 8 - 1, blue_over_green),
+                (w * 5 / 8 - 1, h * 5 / 8, blue_over_green),
+            ];
+            // SAFETY: submission completed and every sample is inside the mapped footprint.
+            unsafe {
+                let mut data = std::ptr::null_mut();
+                readback.Map(0, None, Some(&mut data)).unwrap();
+                for (x, y, expected) in checks {
+                    let at =
+                        layout.Offset as usize + (y * layout.Footprint.RowPitch + x * 4) as usize;
+                    let actual = data.cast::<u8>().add(at).cast::<[u8; 4]>().read();
+                    assert!(
+                        actual
+                            .into_iter()
+                            .zip(expected)
+                            .all(|(a, e)| a.abs_diff(e) <= 1),
+                        "pixel ({x}, {y}) was {actual:?}, expected {expected:?}"
+                    );
+                }
+                readback.Unmap(0, None);
+            }
         }
     }
 }

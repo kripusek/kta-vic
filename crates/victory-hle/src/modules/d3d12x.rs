@@ -50,7 +50,7 @@ pub fn use_shader_cache(dir: std::path::PathBuf) {
 }
 
 #[cfg(windows)]
-pub use victory_gpu::pipeline::limit_pipeline_workers;
+pub use victory_gpu::{pipeline::limit_pipeline_workers, set_output_height};
 
 pub(crate) fn module() -> HleModule {
     HleModule {

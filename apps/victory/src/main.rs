@@ -112,6 +112,9 @@ enum Command {
         /// Omit to keep the title's requested intervals.
         #[arg(long)]
         fps: Option<victory_hle::FrameRate>,
+        /// Maximum height of the host presentation backbuffer (overrides VICTORY_OUTPUT_HEIGHT).
+        #[arg(long)]
+        output_height: Option<std::num::NonZeroU32>,
         /// Limit background pipeline compilation threads for this launch.
         #[arg(long)]
         max_pipeline_workers: Option<std::num::NonZeroU8>,
@@ -175,10 +178,18 @@ fn main() -> Result<()> {
             execute,
             console,
             fps,
+            output_height,
             max_pipeline_workers,
             title_args: _,
         } => run::run(
-            &exe, unimplemented, strict, execute, console, fps, max_pipeline_workers,
+            &exe,
+            unimplemented,
+            strict,
+            execute,
+            console,
+            fps,
+            output_height,
+            max_pipeline_workers,
         ),
         Command::Config => show_config(),
     }
@@ -255,6 +266,49 @@ mod cli_tests {
             assert_eq!(fps, expected);
         }
         assert!(Cli::try_parse_from(["victory", "run", "game.exe", "--fps", "120"]).is_err());
+    }
+
+    #[test]
+    fn run_output_height_is_optional_and_positive() {
+        for (value, expected) in [
+            (None, None),
+            (Some("720"), Some(720)),
+            (Some("1080"), Some(1080)),
+        ] {
+            let mut args = vec!["victory", "run", "game.exe"];
+            if let Some(value) = value {
+                args.extend(["--output-height", value]);
+            }
+            let Command::Run { output_height, .. } = Cli::try_parse_from(args).unwrap().command
+            else {
+                panic!("expected run subcommand");
+            };
+            assert_eq!(output_height.map(|height| height.get()), expected);
+        }
+        for invalid in ["0", "-1", "abc", "4294967296"] {
+            assert!(
+                Cli::try_parse_from(["victory", "run", "game.exe", "--output-height", invalid])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn run_output_height_flag_overrides_environment() {
+        use std::num::NonZeroU32;
+        assert_eq!(
+            run::resolve_output_height(None, Ok("1080".into())).unwrap(),
+            NonZeroU32::new(1080)
+        );
+        assert_eq!(
+            run::resolve_output_height(NonZeroU32::new(720), Ok("1080".into())).unwrap(),
+            NonZeroU32::new(720)
+        );
+        assert_eq!(
+            run::resolve_output_height(None, Err(std::env::VarError::NotPresent)).unwrap(),
+            None
+        );
+        assert!(run::resolve_output_height(None, Ok("0".into())).is_err());
     }
 
     #[test]
