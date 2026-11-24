@@ -134,12 +134,12 @@ const SPILL_FIRST: u8 = 16;
 /// never uses, and the loads read that block. Without such a block, or when a
 /// branch can return to the entry, nothing is rewritten.
 fn spill_loads(
-    list: Vec<Instruction>,
+    list: &[Instruction],
     wave64: bool,
     vgprs: u16,
     code_len: usize,
     spilled: u128,
-) -> Result<Vec<Instruction>, ShaderError> {
+) -> Result<Option<Vec<Instruction>>, ShaderError> {
     use gfx10::Fields::{Smem, Sop, Valu};
     let mut targets = std::collections::BTreeSet::new();
     for inst in list.iter() {
@@ -151,16 +151,16 @@ fn spill_loads(
         }
     }
     let Some(entry) = list.first().map(|i| i.offset) else {
-        return Ok(list);
+        return Ok(None);
     };
     if targets.contains(&entry) {
-        return Ok(list);
+        return Ok(None);
     }
     // Every SGPR the program reads or writes, to find a block it never uses.
     let mut used = [false; 128];
     for inst in list.iter() {
         let Some(name) = inst.name() else {
-            return Ok(list);
+            return Ok(None);
         };
         let Ok(effects) = effects(
             inst,
@@ -169,7 +169,7 @@ fn spill_loads(
             1 + u8::from(wave64),
             vgprs,
         ) else {
-            return Ok(list);
+            return Ok(None);
         };
         for reg in effects
             .into_iter()
@@ -180,7 +180,6 @@ fn spill_loads(
             }
         }
     }
-    let original = list.clone();
     // Where each rewritten copy is in `out`, and the user SGPR it stands for.
     let mut copies: Vec<(usize, u8)> = Vec::new();
     // 1: a copy of s0, 2: a copy of s1, 3: s1 masked to the address's
@@ -275,10 +274,10 @@ fn spill_loads(
                 tag[k as usize] = 0;
             }
         }
-        out.push(inst);
+        out.push(inst.clone());
     }
     let Some(last) = copies.iter().map(|c| c.1).max() else {
-        return Ok(out);
+        return Ok(None);
     };
     // A block of SGPRs past the user SGPRs the table stands for that the
     // program never touches, below VCC.
@@ -286,7 +285,7 @@ fn spill_loads(
     let Some(block) = (usize::from(last) + 1..=usize::from(VCC) - size)
         .find(|&b| used[b..b + size].iter().all(|u| !u))
     else {
-        return Ok(original);
+        return Ok(None);
     };
     let moved = |src: u8| (block + usize::from(src - SPILL_FIRST)) as u8;
     let mut read: Vec<u8> = copies.iter().map(|c| c.1).collect();
@@ -307,7 +306,7 @@ fn spill_loads(
         entries.push(s_mov(moved(src), src, entry)?);
     }
     entries.extend(out);
-    Ok(entries)
+    Ok(Some(entries))
 }
 
 /// `s_mov_b32 s<dst>, s<src>`, placed at `offset`.
@@ -360,10 +359,13 @@ fn build_with(
     vgprs: u16,
     spilled: u128,
 ) -> Result<Program, ShaderError> {
-    let mut list = gfx10::decode(code)?;
-    if spilled != 0 {
-        list = spill_loads(list, wave64, vgprs, code.len(), spilled)?;
-    }
+    let decoded = gfx10::decode(code)?;
+    let rewritten = if spilled != 0 {
+        spill_loads(&decoded, wave64, vgprs, code.len(), spilled)?
+    } else {
+        None
+    };
+    let list = rewritten.as_deref().unwrap_or(&decoded);
     let lanes = 1 + u8::from(wave64);
     let isa = |offset, reason| ShaderError::Isa { offset, reason };
 
@@ -371,7 +373,9 @@ fn build_with(
     let mut leaders = vec![0];
     for (i, inst) in list.iter().enumerate() {
         let flow = gfx10::control(inst, code.len(), |at| {
-            list[..list.partition_point(|i| i.offset < at)].last()
+            // Far jumps are a contiguous sequence in the machine encoding.
+            // Replacing a load with scalar moves changes instruction lengths.
+            decoded[..decoded.partition_point(|i| i.offset < at)].last()
         })?;
         if let Flow::Jump(t) | Flow::Branch(t) = flow {
             leaders.push(t);
@@ -404,7 +408,8 @@ fn build_with(
     let next_offsets: Vec<Option<usize>> = (0..list.len())
         .map(|i| list.get(i + 1).map(|n| n.offset))
         .collect();
-    for ((machine, flow), next) in list.into_iter().zip(flows).zip(next_offsets) {
+    let instructions = rewritten.unwrap_or(decoded);
+    for ((machine, flow), next) in instructions.into_iter().zip(flows).zip(next_offsets) {
         let b = leaders.partition_point(|&l| l <= machine.offset) - 1;
         let name = machine.name().ok_or(ShaderError::Unsupported {
             offset: machine.offset,
@@ -1579,6 +1584,26 @@ mod tests {
         assert_eq!(add.read(Reg::S(0)), Some(phi.value));
         assert_eq!(b1.insts[1].read(Reg::S(0)), add.write(Reg::S(0)));
         assert_eq!(b2.insts[0].name(), "s_endpgm");
+    }
+
+    #[test]
+    fn rewritten_spill_preserves_far_jump_target() {
+        let code: Vec<u8> = [
+            0xBE82_0300u32, 0x8703_FF01, 0xff, // set up the spill pointer
+            0xBE88_1F00, // 12: s_getpc_b64 s[8:9], produces 16
+            0xF400_0101, 0xFA00_0000, // 16: s_load_dword s4, s[2:3], 0
+            0x8008_FF08, 28, // 24: s_add_u32 s8, s8, 28 -> 44
+            0x8209_8009, 0xBE80_2008, // add carry, then setpc
+            0xffff_ffff, S_ENDPGM,
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+        let p = build_with(&code, false, 256, 1 << 16).unwrap();
+        assert!(p.blocks[0].insts.iter().all(|i| i.name() != "s_load_dword"));
+        assert_eq!(p.blocks[0].exit, Exit::Jump(1));
+        assert_eq!(p.blocks[1].offset, 44);
+        assert_eq!(p.blocks[1].preds, [0]);
     }
 
     #[test]
