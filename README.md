@@ -138,7 +138,7 @@ Two upstream fixes helped startup on NVIDIA. Nostyxx remapped descriptor tables 
 - **fxceless/victory-fork**: `https://github.com/fxceless/victory-fork` (remote `victoryfork`) — m.in. poprawka `e9765a7` wyłączająca domyślnie `VICTORY_WAVE_WIDE` (eliminacja device loss na `ptfx_CS_lightAtlas`).
 - **igvcc/luacias**: `https://github.com/igvcc/luacias` (lokalnie `e:\gta6\luacias`) — baza `v0.2.0-preview`, dokumentacja i optymalizacje VRAM/LDS.
 - **Corgansm/Corgi-victoryGTA6**: `https://github.com/Corgansm/Corgi-victoryGTA6` (remote `corgi`) — nowy fork/build pod GTA VI (śledzony pod kątem nadchodzących commitów).
-- **Marvisak/VIctory**: `https://github.com/Marvisak/VIctory` (remote `upstream`) — zintegrowane PR-y na `clean-base-v2`: `#93` (BCPack lookup), `#706` (`cmp_lg_ordered`), `#654` (`uav-describe`), `#681` (`vertex-buffer-null-unbind`).
+- **Marvisak/VIctory**: `https://github.com/Marvisak/VIctory` (remote `upstream`) — zintegrowane PR-y na `clean-base-v2`: `#93` (BCPack lookup), `#432` (uninitialized SGPRs), `#448` (min/max signed zeros), `#520` (`XAsync` payload), `#565` (conservative depth/position), `#637` (packed inline constants), `#654` (`uav-describe`), `#681` (`vertex-buffer-null-unbind`), `#706` (`cmp_lg_ordered`).
 - **ifBars/VICauseway**: `https://github.com/ifBars/VICauseway` (remote `causeway`) — baza poranna `606a81b` + poprawki `8a05317`, `180ebb0`, `f681ba3` oraz PR-y `#360`, `#367`, `#368`, `#369`, `#1070`.
 
 ### Launcher i narzędzia lokalne (`e:\gta6\`)
