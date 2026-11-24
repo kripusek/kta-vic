@@ -1278,6 +1278,8 @@ struct Batch {
     refreshes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
     gpu_writes: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize)>,
     declared_writes: std::collections::HashSet<(usize, usize, usize)>,
+    #[cfg(test)]
+    updates: usize,
     /// Staging buffers (by address) refreshed since the last title write.
     textures: std::collections::HashSet<usize>,
 }
@@ -1295,10 +1297,20 @@ impl Batch {
         len: usize,
     ) {
         if self.new_gpu_write(shadow, address, len) {
-            // The first declaration needs the refreshed bytes for its snapshot.
-            // Another declaration of this exact range is already pending until
-            // the GPU submission finishes, so it needs no refresh boundary.
-            self.flush();
+            // Only this host copy supplies the snapshot. Other copies can
+            // keep merging refreshes until their own write or a title write.
+            if let Some(index) = self
+                .refreshes
+                .iter()
+                .position(|(pending, ..)| std::sync::Arc::ptr_eq(pending, shadow))
+            {
+                let (copy, from, to) = self.refreshes.remove(index);
+                refresh_shadow(&copy, from, to);
+                #[cfg(test)]
+                {
+                    self.updates += 1;
+                }
+            }
             shadow.writing(address, len);
             self.gpu_writes.push((shadow.clone(), address, len));
         }
@@ -1330,16 +1342,24 @@ impl Batch {
     }
 
     fn flush(&mut self) {
+        #[cfg(test)]
+        {
+            self.updates += self.refreshes.len();
+        }
         for (shadow, from, to) in self.refreshes.drain(..) {
-            let started = std::time::Instant::now();
-            let copied = shadow.update(from, to - from);
-            let us = started.elapsed().as_micros() as u64;
-            #[cfg(feature = "diagnostics")]
-            crate::copystat::range(from, to - from, us, 0);
-            PREPARING[0].fetch_add(us, Ordering::Relaxed);
-            PREPARING[1].fetch_add(copied as u64, Ordering::Relaxed);
+            refresh_shadow(&shadow, from, to);
         }
     }
+}
+
+fn refresh_shadow(shadow: &crate::shadow::Shadow, from: usize, to: usize) {
+    let started = std::time::Instant::now();
+    let copied = shadow.update(from, to - from);
+    let us = started.elapsed().as_micros() as u64;
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::range(from, to - from, us, 0);
+    PREPARING[0].fetch_add(us, Ordering::Relaxed);
+    PREPARING[1].fetch_add(copied as u64, Ordering::Relaxed);
 }
 
 /// Copies title memory at submission. The ranges were checked against their
@@ -1601,6 +1621,7 @@ mod title_copies {
         release(to);
         // Neither aligned nor whole: the bytes around the range stay.
         let to = holed(0xee);
+
         // SAFETY: inside the first block.
         write_mapped(unsafe { to.add(100) }, from.as_ptr(), BLOCK - 300);
         let first = block(to, 0);
@@ -1620,7 +1641,6 @@ mod title_copies {
         release(to);
     }
 }
-
 
 impl Host {
     /// A buffer in the upload heap, mapped for writing.
@@ -2419,6 +2439,73 @@ mod tests {
         batch.title_written();
         assert!(!batch.new_gpu_write(&a, 4096, 16));
         assert!(Batch::default().new_gpu_write(&a, 4096, 16));
+    }
+
+    #[test]
+    fn gpu_write_flushes_only_its_shadow_until_title_write() {
+        let Some(_) = super::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let memory = || crate::resource::Memory::zeroed(64 << 10, 64 << 10).unwrap();
+        let (a_memory, b_memory) = (memory(), memory());
+        let (a_va, b_va) = (a_memory.address(), b_memory.address());
+        let (a, b) = (a_va as usize, b_va as usize);
+        let register = |address: u64| {
+            crate::shadow::register(address as usize, address, 64 << 10);
+            crate::shadow::find(address, 64 << 10).unwrap()
+        };
+        let (a_shadow, b_shadow) = (register(a_va), register(b_va));
+        assert_ne!(a_shadow.buffer, b_shadow.buffer);
+        let title = |address: usize, bytes: u8| {
+            // SAFETY: address is the start of one of the test allocations.
+            unsafe { (address as *mut u8).write_bytes(bytes, 32) };
+        };
+        let mapped = |shadow: &crate::shadow::Shadow| {
+            let mut mapping = std::ptr::null_mut();
+            // SAFETY: the mapped D3D12 buffer covers the 32 test bytes.
+            unsafe {
+                shadow.buffer.Map(0, None, Some(&mut mapping)).unwrap();
+                let bytes = mapping.cast::<[u8; 32]>().read();
+                shadow.buffer.Unmap(0, None);
+                bytes
+            }
+        };
+        title(a, 0xa1);
+        title(b, 0xb1);
+        let b_initial = mapped(&b_shadow);
+        let mut batch = Batch::default();
+        batch.add(&b_shadow, b, 16);
+        batch.add(&a_shadow, a, 16);
+        batch.gpu_write(&a_shadow, a, 16);
+        assert_eq!(batch.updates, 1);
+        assert_eq!(mapped(&a_shadow)[..16], [0xa1; 16]);
+        assert_eq!(mapped(&b_shadow), b_initial);
+
+        batch.add(&b_shadow, b + 16, 16);
+        batch.add(&a_shadow, a + 16, 16);
+        batch.gpu_write(&a_shadow, a + 16, 16);
+        batch.gpu_write(&a_shadow, a, 16);
+        assert_eq!(batch.updates, 2);
+        assert_eq!(mapped(&a_shadow), [0xa1; 32]);
+        assert_eq!(mapped(&b_shadow), b_initial);
+        assert_eq!(batch.refreshes.len(), 1);
+        assert_eq!((batch.refreshes[0].1, batch.refreshes[0].2), (b, b + 32));
+
+        batch.title_written();
+        assert_eq!(batch.updates, 3);
+        assert_eq!(mapped(&b_shadow), [0xb1; 32]);
+        title(b, 0xb2);
+        batch.add(&b_shadow, b, 32);
+        assert_eq!(mapped(&b_shadow), [0xb1; 32]);
+        batch.flush();
+        assert_eq!(batch.updates, 4);
+        assert_eq!(mapped(&b_shadow), [0xb2; 32]);
+        assert_eq!(a_shadow.copy_back(a, 16), 0);
+        assert_eq!(a_shadow.copy_back(a + 16, 16), 0);
+
+        crate::shadow::unregister(a, a_va);
+        crate::shadow::unregister(b, b_va);
     }
 
     #[test]
