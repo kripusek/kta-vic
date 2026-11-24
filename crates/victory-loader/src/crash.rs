@@ -416,9 +416,42 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
     Some(len)
 }
 
+/// Intercepts synthetic watchdog / heartbeat zero-write assertions (`mov dword ptr [0], imm32`)
+/// emitted by the game engine when a worker thread exceeds its heartbeat threshold.
+unsafe fn intercept_synthetic_abort(info: *mut EXCEPTION_POINTERS) -> bool {
+    // SAFETY: valid exception pointers passed by system.
+    unsafe {
+        let record = &*(*info).ExceptionRecord;
+        let context = &mut *(*info).ContextRecord;
+        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION {
+            return false;
+        }
+        if record.NumberParameters >= 2
+            && record.ExceptionInformation[0] == 1 // write
+            && record.ExceptionInformation[1] == 0 // address 0x0
+        {
+            let code = context.Rip as *const u8;
+            let prefix = code.cast::<[u8; 7]>().read_unaligned();
+            if prefix == [0xc7, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00] {
+                tracing::warn!(
+                    rip = format_args!("{:#x}", context.Rip),
+                    "suppressed synthetic zero-write watchdog abort"
+                );
+                let mut skip = 11;
+                if *code.add(11) == 0xcc {
+                    skip += 1;
+                }
+                context.Rip += skip;
+                return true;
+            }
+        }
+        false
+    }
+}
+
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     // SAFETY: the system passes valid exception pointers.
-    if unsafe { emulate_amd_only(info) } {
+    if unsafe { emulate_amd_only(info) || intercept_synthetic_abort(info) } {
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
     // SAFETY: as above.

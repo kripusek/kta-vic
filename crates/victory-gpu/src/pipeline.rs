@@ -348,6 +348,17 @@ pub(crate) extern "system" fn create_compute_x(
     create_compute(this, desc, iid, out)
 }
 
+/// Device method 0x218: `DeserializeComputePipelineStateX(desc, iid, out)`.
+/// Passes through to create_compute to avoid falling back to slow dynamic ACO recompilation.
+pub(crate) extern "system" fn deserialize_compute_x(
+    this: This,
+    desc: *const ComputeHead,
+    iid: *const Iid,
+    out: *mut This,
+) -> HRESULT {
+    create_compute(this, desc, iid, out)
+}
+
 /// A pipeline described as a stream: its size and the subobjects, each a
 /// type then its data, padded to 8 bytes.
 #[repr(C)]

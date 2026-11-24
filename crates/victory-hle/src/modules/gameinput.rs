@@ -63,10 +63,11 @@ const POLL: Duration = Duration::from_millis(8);
 
 /// The keyboard's stand-in gamepad (virtual key, button); README lists it.
 /// Sticks: W/A/S/D left, I/J/K/L right; triggers Z and C.
-const FALLBACK_BUTTONS: [(u8, u32); 14] = [
+const FALLBACK_BUTTONS: [(u8, u32); 15] = [
     (0x1B, MENU), // Esc
     (0x09, VIEW), // Tab
     (0x0D, A),    // Enter
+    (0x20, A),    // Space
     (0x08, B),    // Backspace
     (b'X', X),
     (b'Y', Y),
@@ -455,10 +456,30 @@ impl State {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
         let any_pad = pads.iter().any(Option::is_some);
-        for (slot, pad) in pads.into_iter().enumerate() {
+        let keys_pad = fallback(&keys);
+        for (slot, mut pad) in pads.into_iter().enumerate() {
+            if slot == 0 {
+                if let Some(ref mut p) = pad {
+                    p.buttons |= keys_pad.buttons;
+                    if keys_pad.left_x != 0.0 || keys_pad.left_y != 0.0 {
+                        p.left_x = keys_pad.left_x;
+                        p.left_y = keys_pad.left_y;
+                    }
+                    if keys_pad.right_x != 0.0 || keys_pad.right_y != 0.0 {
+                        p.right_x = keys_pad.right_x;
+                        p.right_y = keys_pad.right_y;
+                    }
+                    if keys_pad.left_trigger != 0.0 {
+                        p.left_trigger = keys_pad.left_trigger;
+                    }
+                    if keys_pad.right_trigger != 0.0 {
+                        p.right_trigger = keys_pad.right_trigger;
+                    }
+                }
+            }
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys)));
+        let fallback = (!any_pad).then(|| Value::Pad(keys_pad));
         self.update(devices, FALLBACK, fallback, now, &mut events);
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
