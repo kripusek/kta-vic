@@ -185,6 +185,8 @@ struct Lower<'a> {
     scalar: HashMap<Site, Address>,
     exports: HashMap<Site, &'a Export>,
     interps: HashMap<Site, &'a Interp>,
+    /// Each f16 interpolation's first half preserves its old high half.
+    first_halves: HashMap<Value, Value>,
     handles: HashMap<(usize, Site, u8, bool, (u32, u32)), V>,
     /// Blocks splitting the edge from one IR block to another.
     edges: HashMap<(usize, usize), usize>,
@@ -1371,6 +1373,23 @@ impl<'a> Lower<'a> {
             scalar: x.res.scalar.iter().copied().collect(),
             exports: x.io.exports.iter().map(|e| (e.site, e)).collect(),
             interps: x.io.interps.iter().map(|(s, i)| (*s, i)).collect(),
+            first_halves: p
+                .blocks
+                .iter()
+                .flat_map(|b| &b.insts)
+                .filter_map(|inst| {
+                    if inst.name() != "v_interp_p1ll_f16" {
+                        return None;
+                    }
+                    let Fields::Valu(v) = &inst.fields else {
+                        return None;
+                    };
+                    let Operand::Vector { reg, .. } = v.dst? else {
+                        return None;
+                    };
+                    Some((inst.write(Reg::V(reg))?, inst.read(Reg::V(reg))?))
+                })
+                .collect(),
             handles: HashMap::new(),
             edges: HashMap::new(),
             exported: vec![false; p.blocks.len()],
@@ -5653,9 +5672,14 @@ impl<'a> Lower<'a> {
                 let Some(Operand::Vector { reg, .. }) = v.dst else {
                     return Err("a mixed-precision result");
                 };
-                let old = match inst.read(Reg::V(reg)) {
-                    Some(o) => self.i32_of(o)?,
-                    None => self.s.m.i32(0),
+                // A partial-EXEC write needs the entire old value for inactive lanes.
+                let old = if name == "v_fma_mixlo_f16" && guard.is_none() {
+                    self.preserved_high(inst, reg)?
+                } else {
+                    match inst.read(Reg::V(reg)) {
+                        Some(o) => self.i32_of(o)?,
+                        None => self.s.m.i32(0),
+                    }
                 };
                 let h = self
                     .s
@@ -7061,14 +7085,30 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// The old value whose high half a low-half write preserves. Any number
+    /// of f16 interpolation first halves may be in between: they replace the
+    /// low half but leave the high half untouched.
+    fn preserved_high(&mut self, inst: &Inst, reg: u8) -> Result<V, Why> {
+        let mut old = inst.read(Reg::V(reg));
+        while let Some(v) = old {
+            let Some(&before) = self.first_halves.get(&v) else {
+                break;
+            };
+            old = Some(before);
+        }
+        match old {
+            Some(v) => self.i32_of(v),
+            None => Ok(self.s.m.i32(0)),
+        }
+    }
+
     /// `x` (an f16 in the low bits) as the low half of VGPR `reg`: 16-bit
     /// results keep the register's high half (GFX10).
     fn low_half(&mut self, inst: &Inst, reg: u8, x: V) -> V {
         let c = self.cur;
-        let old = match inst.read(Reg::V(reg)).map(|o| self.i32_of(o)) {
-            Some(Ok(o)) => o,
-            _ => self.s.m.i32(0),
-        };
+        let old = self
+            .preserved_high(inst, reg)
+            .unwrap_or_else(|_| self.s.m.i32(0));
         let (high, low) = (self.s.m.i32(0xFFFF_0000), self.s.m.i32(0xFFFF));
         let old = self.s.m.bin(c, Bin::And, old, high);
         let x = self.s.m.bin(c, Bin::And, x, low);

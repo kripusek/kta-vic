@@ -1164,6 +1164,219 @@ mod tests {
         // Translated or refused with a reason; it must not panic.
         let _ = super::emit(&c, &native, &p, &st, &io, &res);
     }
+
+    /// A low-half f16 interpolation preserves the destination's old high
+    /// half. The second interpolation writes zero into the low half,
+    /// leaving the original 1.0 bit pattern for the color export.
+    #[test]
+    fn an_f16_interpolation_preserves_its_old_high_half() {
+        check_f16_interpolation_high_half(false);
+    }
+
+    #[test]
+    fn a_guarded_f16_fma_requires_the_entire_old_interpolation_result() {
+        check_f16_interpolation_high_half(true);
+    }
+
+    fn check_f16_interpolation_high_half(guarded_fma: bool) {
+        let mut words = vec![
+            0x7E16_02F2u32, // v_mov_b32 v11, 1.0 (initial high bits)
+            0x7E20_0280,    // v_mov_b32 v16, 0
+            0xD742_000B,
+            0x0002_0102, // v_interp_p1ll_f16 v11, v0, attr2.x high
+        ];
+        if guarded_fma {
+            words.extend([
+                0x7E10_0280, // v_mov_b32 v8, 0
+                0xD75A_000F,
+                0x042E_0302, // v_interp_p2_f16 v15, v1, attr2.x, v11 high
+                0x7D84_0080, // v_cmp_eq_u32 vcc, 0, v0
+                0xBE88_246A, // s_and_saveexec_b64 s[8:9], vcc
+                0xCC21_000B,
+                0x0A02_2108, // v_fma_mixlo_f16 v11, sel_lo(v8), v16, 0
+                0xBEFE_0408, // s_mov_b64 exec, s[8:9]
+            ]);
+        } else {
+            words.extend([0xD75A_000B, 0x042E_0302]); // v_interp_p2_f16 v11, v1, attr2.x, v11 high
+        }
+        words.extend([
+            0xF800_1801,
+            0x0000_000B, // exp mrt0, v11, off, off, off done vm
+            0xBF81_0000, // s_endpgm
+        ]);
+        let native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: guarded_fma,
+            vgprs: 17,
+            layout: vec![],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![crate::native::PsInput {
+                    usage: crate::native::Usage::Generic,
+                    row: 2,
+                    mask: 3,
+                    attr: 2,
+                    flat: false,
+                    fp16: true,
+                    pack2: true,
+                    row2: 2,
+                }],
+                input_addr: 2,
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+        };
+        let input = SigElement {
+            name: "TEXCOORD".into(),
+            index: 0,
+            kind: 0,
+            comp: 9,
+            interp: 0,
+            row: Some(2),
+            col: 0,
+            cols: 2,
+            usage: 0,
+            half: false,
+        };
+        let output = SigElement {
+            name: "SV_Target".into(),
+            index: 0,
+            kind: 16,
+            comp: 9,
+            interp: 0,
+            row: Some(0),
+            col: 0,
+            cols: 1,
+            usage: 1,
+            half: false,
+        };
+        let isg1 = super::container::signature(&[input], true);
+        let osg1 = super::container::signature(&[output], false);
+        let bytes =
+            crate::dxbc::build(&[(super::FourCC::ISG1, &isg1), (super::FourCC::OSG1, &osg1)]);
+        let c = Container::parse(&bytes).unwrap();
+        let p = ir::build(&native.patched_code(), native.wave64, native.vgprs).unwrap();
+        let res = resource::track(&p, &native.layout, native.stage).unwrap();
+        let io = io::raise(&p, &native).unwrap();
+        let st = structure::structure(&p).unwrap();
+        let emitted = emit(&c, &native, &p, &st, &io, &res);
+        if guarded_fma {
+            assert!(
+                matches!(
+                    emitted,
+                    Err(crate::ShaderError::Unsupported {
+                        offset: 48,
+                        what: "the first half of an interpolation",
+                    })
+                ),
+                "guarded result: {:?}",
+                emitted.as_ref().err(),
+            );
+            return;
+        }
+        let mut host = emitted.unwrap();
+        #[cfg(windows)]
+        if let Ok(mut v) = super::validator::Validator::load(
+            super::validator::Validator::default_path().as_deref(),
+        ) {
+            v.validate(&mut host.dxil).unwrap();
+        }
+        #[cfg(all(windows, feature = "agility"))]
+        {
+            use super::bitcode::{Attr, Term};
+            use super::host::{Draw, Host};
+            use super::shader::Shader;
+
+            let mut vs = Shader::new(false);
+            vs.outputs.push(SigElement {
+                name: "SV_Position".into(),
+                index: 0,
+                kind: 3,
+                comp: 9,
+                interp: 4,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            });
+            vs.inputs.push(SigElement {
+                name: "POSITION".into(),
+                index: 0,
+                kind: 0,
+                comp: 9,
+                interp: 0,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            });
+            vs.outputs.push(SigElement {
+                name: "TEXCOORD".into(),
+                index: 0,
+                kind: 0,
+                comp: 9,
+                interp: 2,
+                row: Some(2),
+                col: 0,
+                cols: 2,
+                usage: 3,
+                half: false,
+            });
+            let block = vs.entry;
+            for col in 0..4u8 {
+                let undef = vs.m.undef(vs.t.i32);
+                let args = [vs.m.i32(0), vs.m.i32(0), vs.m.i8(col), undef];
+                let v = vs.op(block, "loadInput.f32", Attr::ReadNone, vs.t.f32, 4, &args);
+                let out = [vs.m.i32(0), vs.m.i32(0), vs.m.i8(col), v];
+                vs.op(block, "storeOutput.f32", Attr::NoUnwind, vs.t.void, 5, &out);
+            }
+            for col in 0..2u8 {
+                let out = [vs.m.i32(1), vs.m.i32(0), vs.m.i8(col), vs.m.f32(0)];
+                vs.op(block, "storeOutput.f32", Attr::NoUnwind, vs.t.void, 5, &out);
+            }
+            vs.m.terminate(block, Term::Ret);
+            let vs = HostShader {
+                stage: HwStage::Vs,
+                dxil: vs.finish(),
+                user_data: Vec::new(),
+                samplers: Vec::new(),
+                static_samplers: Vec::new(),
+                root_cbvs: Vec::new(),
+                root_srvs: Vec::new(),
+            };
+            let warp = match Host::new(true) {
+                Ok(warp) => warp,
+                Err(error) if std::env::var("VICTORY_WARP").as_deref() != Ok("1") => {
+                    eprintln!("WARP host unavailable: {error}");
+                    return;
+                }
+                Err(error) => panic!("WARP host required: {error}"),
+            };
+            let (root, pso) = warp.pipeline(&vs, &host).unwrap();
+            let vertices = [
+                -1.0, -1.0, 0.5, 1.0, -1.0, 3.0, 0.5, 1.0, 3.0, -1.0, 0.5, 1.0,
+            ];
+            let colors = warp
+                .draw(
+                    &root,
+                    &pso,
+                    &Draw {
+                        roots: vec![],
+                        textures: &[],
+                        samplers: &[],
+                        vertices: &vertices,
+                        stride: 16,
+                        size: (1, 1),
+                        mesh_groups: 0,
+                    },
+                )
+                .unwrap();
+            assert_eq!(colors[0][0], 1.0);
+        }
+    }
 }
 
 #[cfg(test)]
