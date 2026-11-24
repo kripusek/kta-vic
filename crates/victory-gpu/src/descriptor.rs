@@ -231,7 +231,9 @@ pub(crate) fn rtv_mips(
     texture: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     desc: Option<&windows::Win32::Graphics::Direct3D12::D3D12_RENDER_TARGET_VIEW_DESC>,
 ) -> Option<std::ops::Range<u32>> {
-    use windows::Win32::Graphics::Direct3D12::D3D12_RTV_DIMENSION_TEXTURE2D;
+    use windows::Win32::Graphics::Direct3D12::{
+        D3D12_RTV_DIMENSION_TEXTURE2D, D3D12_RTV_DIMENSION_TEXTURE2DARRAY,
+    };
     let count = crate::host::color_mip_count(texture)?;
     let mip = match desc {
         None => 0,
@@ -239,6 +241,14 @@ pub(crate) fn rtv_mips(
             // SAFETY: the view dimension selects this union member.
             let view = unsafe { desc.Anonymous.Texture2D };
             if view.PlaneSlice != 0 {
+                return None;
+            }
+            view.MipSlice
+        }
+        Some(desc) if desc.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DARRAY => {
+            // SAFETY: the view dimension selects this union member.
+            let view = unsafe { desc.Anonymous.Texture2DArray };
+            if view.FirstArraySlice != 0 || view.ArraySize != 1 || view.PlaneSlice != 0 {
                 return None;
             }
             view.MipSlice

@@ -2177,13 +2177,15 @@ mod tests {
     #[test]
     fn transitions_keep_color_target_mips_independent() {
         use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
         let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
             return;
         };
         let null = std::ptr::null();
         let desc = ResourceDesc {
             flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 as u32,
-            ..texture(8, 8, 28, 2)
+            ..texture(8, 8, 28, 3)
         };
         let target = D3D12_RESOURCE_STATE_RENDER_TARGET.0 as u32;
         let sampled = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE.0 as u32;
@@ -2202,6 +2204,51 @@ mod tests {
             ),
             S_OK
         );
+        let texture = host_resource(image).unwrap();
+        let rtv = |mip, first, count, plane| D3D12_RENDER_TARGET_VIEW_DESC {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2DARRAY,
+            Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+                Texture2DArray: D3D12_TEX2D_ARRAY_RTV {
+                    MipSlice: mip,
+                    FirstArraySlice: first,
+                    ArraySize: count,
+                    PlaneSlice: plane,
+                },
+            },
+        };
+        let rtv_range = |view| crate::descriptor::rtv_mips(texture, Some(&view));
+        let srv_range = |mip, levels, first, count, plane| {
+            crate::descriptor::host::srv_mips(
+                texture,
+                &[
+                    28,
+                    D3D12_SRV_DIMENSION_TEXTURE2DARRAY.0 as u32,
+                    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    0, // Padding before the D3D12 descriptor union.
+                    mip,
+                    levels,
+                    first,
+                    count,
+                    plane,
+                    0,
+                ],
+            )
+        };
+        let rtv_mip1 = rtv_range(rtv(1, 0, 1, 0));
+        let srv_mip0 = srv_range(0, 1, 0, 1, 0);
+        assert_eq!(rtv_mip1, Some(1..2));
+        assert_eq!(srv_mip0, Some(0..1));
+        assert_eq!(srv_range(1, u32::MAX, 0, 1, 0), Some(1..3));
+        assert_eq!(srv_range(0, u32::MAX, 0, 1, 0), None);
+        for (first, count, plane) in [(1, 1, 0), (0, 0, 0), (0, 2, 0), (0, 1, 1)] {
+            assert_eq!(rtv_range(rtv(1, first, count, plane)), None);
+            assert_eq!(srv_range(0, 1, first, count, plane), None);
+        }
+        assert_eq!(rtv_range(rtv(3, 0, 1, 0)), None);
+        for (mip, levels) in [(0, 0), (1, 3), (3, 1), (u32::MAX, u32::MAX)] {
+            assert_eq!(srv_range(mip, levels, 0, 1, 0), None);
+        }
         let list = host.new_list().unwrap();
         let changes = |state, mips| {
             let mut barriers = Vec::new();
@@ -2211,9 +2258,9 @@ mod tests {
             barriers
         };
         assert!(changes(target, None).is_empty());
-        assert_eq!(changes(sampled, Some(0..1)), [(0, target, sampled)]);
-        assert!(changes(target, Some(1..2)).is_empty());
-        assert!(changes(sampled, Some(0..1)).is_empty());
+        assert_eq!(changes(sampled, srv_mip0.clone()), [(0, target, sampled)]);
+        assert!(changes(target, rtv_mip1).is_empty());
+        assert!(changes(sampled, srv_mip0).is_empty());
         assert_eq!(
             changes(copy, None),
             [

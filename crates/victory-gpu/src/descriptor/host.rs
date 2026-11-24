@@ -514,14 +514,28 @@ pub(crate) fn srv_mips(
 ) -> Option<std::ops::Range<u32>> {
     let count = crate::host::color_mip_count(texture)?;
     let desc = srv_desc(words);
-    if desc.ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2D {
+    // SAFETY: each view dimension selects its corresponding union member.
+    let (start, levels, plane) = unsafe {
+        match desc.ViewDimension {
+            D3D12_SRV_DIMENSION_TEXTURE2D => {
+                let view = desc.Anonymous.Texture2D;
+                (view.MostDetailedMip, view.MipLevels, view.PlaneSlice)
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2DARRAY => {
+                let view = desc.Anonymous.Texture2DArray;
+                if view.FirstArraySlice != 0 || view.ArraySize != 1 {
+                    return None;
+                }
+                (view.MostDetailedMip, view.MipLevels, view.PlaneSlice)
+            }
+            _ => return None,
+        }
+    };
+    if plane != 0 || start >= count {
         return None;
     }
-    // SAFETY: the view dimension selects this union member.
-    let view = unsafe { desc.Anonymous.Texture2D };
-    let start = view.MostDetailedMip;
-    let end = start.saturating_add(view.MipLevels).min(count);
-    (view.PlaneSlice == 0 && start < end && (start != 0 || end != count)).then_some(start..end)
+    let end = if levels == u32::MAX { count } else { start.checked_add(levels)? };
+    (start < end && end <= count && (start != 0 || end != count)).then_some(start..end)
 }
 
 fn uav_desc(words: &[u32; 10]) -> D3D12_UNORDERED_ACCESS_VIEW_DESC {
