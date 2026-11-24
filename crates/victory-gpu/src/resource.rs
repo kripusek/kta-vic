@@ -286,14 +286,20 @@ fn host_lacks_target(_: u32) -> bool {
     false
 }
 
+const RGB9E5: u32 = 67;
+const RGBA16_FLOAT: u32 = 10;
+
 /// The format a render target or unordered-access texture of `format` is
 /// made in on the host, and that render target views and pipelines name:
 /// R8G8B8A8_UNORM for a packed 16-bit format the GPU cannot render to or
 /// write typed (each channel keeps its value, with more precision); else
-/// the format as the host has it. Textures only sampled keep theirs.
+/// RGBA16_FLOAT for RGB9E5, or the format as the host has it. Textures
+/// only sampled keep theirs.
 pub(crate) fn target_format(format: u32) -> u32 {
     let format = pc_format(format);
-    if PACKED_16.contains(&format) && host_lacks_target(format) {
+    if format == RGB9E5 {
+        RGBA16_FLOAT
+    } else if PACKED_16.contains(&format) && host_lacks_target(format) {
         RGBA8_UNORM
     } else {
         format
@@ -305,18 +311,23 @@ pub(crate) fn target_format(format: u32) -> u32 {
 fn widened_packed(this: This) -> Option<u32> {
     let host = host_resource(this)?;
     let guest = resource(this).desc.format;
-    if !PACKED_16.contains(&guest) {
+    if guest != RGB9E5 && !PACKED_16.contains(&guest) {
         return None;
     }
     // SAFETY: a live resource.
-    (unsafe { host.GetDesc() }.Format.0 as u32 == RGBA8_UNORM).then_some(guest)
+    let host_format = if guest == RGB9E5 { RGBA16_FLOAT } else { RGBA8_UNORM };
+    (unsafe { host.GetDesc() }.Format.0 as u32 == host_format).then_some(guest)
 }
 
 #[cfg(windows)]
 fn packed_transfer_format(src: Option<u32>, dst: Option<u32>, resolve: Option<u32>) -> Option<u32> {
     match (src, dst) {
         (None, None) => Some(resolve.unwrap_or(0)),
-        (Some(a), Some(b)) if a == b && resolve.is_none_or(|f| f == a) => Some(RGBA8_UNORM),
+        (Some(a), Some(b)) if a == b && resolve.is_none_or(|f| f == a) => Some(if a == RGB9E5 {
+            RGBA16_FLOAT
+        } else {
+            RGBA8_UNORM
+        }),
         _ => None,
     }
 }
@@ -391,7 +402,7 @@ pub(crate) fn view_format(this: This) -> Option<u32> {
     let host = host_resource(this)?;
     // SAFETY: a live resource.
     let format = unsafe { host.GetDesc() }.Format.0 as u32;
-    (format != own).then_some(own)
+    (format != own && !(own == RGB9E5 && format == RGBA16_FLOAT)).then_some(own)
 }
 
 /// Depth formats with their typeless family: depth textures that shaders
@@ -1706,6 +1717,176 @@ mod tests {
         assert_eq!((r[0], s[0]), (16, 128));
         let (_, _, _, t) = footprints(&texture(64, 64, 71, 1), 1, 1);
         assert_eq!(t, u64::MAX, "no second subresource");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rgb9e5_target_preserves_hdr_channels_on_readback() {
+        use windows::Win32::Graphics::Direct3D12::*;
+        use windows::Win32::Graphics::Dxgi::Common::*;
+        use windows::core::Interface;
+
+        let Some(host) = crate::host::host() else {
+            assert!(std::env::var_os("VICTORY_D3D12_WARP").is_none());
+            return;
+        };
+        let null = std::ptr::null();
+        let color = [0.25f32, 2.0, 8.0, 1.0];
+        let clear = [
+            RGB9E5,
+            color[0].to_bits(),
+            color[1].to_bits(),
+            color[2].to_bits(),
+            color[3].to_bits(),
+        ];
+        let create = |flags, state, clear: *const u32| {
+            let desc = ResourceDesc {
+                flags,
+                ..texture(2, 2, RGB9E5, 1)
+            };
+            let mut image = null;
+            assert_eq!(
+                create_committed(
+                    null,
+                    &PROPERTIES,
+                    0,
+                    &desc,
+                    state,
+                    clear.cast(),
+                    &RESOURCE_IIDS[0],
+                    &mut image
+                ),
+                S_OK
+            );
+            image
+        };
+        let sampled = create(0, 0, null.cast());
+        let unordered = create(4, 0, null.cast());
+        let target = create(5, 4, clear.as_ptr());
+        for (image, format) in [
+            (sampled, RGB9E5),
+            (unordered, RGBA16_FLOAT),
+            (target, RGBA16_FLOAT),
+        ] {
+            // SAFETY: the title resources own live host textures.
+            assert_eq!(
+                unsafe { host_resource(image).expect("host texture").GetDesc() }
+                    .Format
+                    .0 as u32,
+                format
+            );
+            assert_eq!(view_format(image), None);
+        }
+        assert!(transfer_format(target, sampled, None).is_none());
+        assert_eq!(
+            transfer_format(unordered, target, Some(RGB9E5)),
+            Some(RGBA16_FLOAT)
+        );
+        let mut record = [0u64; 14];
+        let handle = record.as_mut_ptr() as u64;
+        crate::descriptor::create_rtv(null, target, &[RGB9E5, 4, 0, 0, 0, 0], handle);
+        let view = crate::descriptor::rtv_record(handle)
+            .unwrap()
+            .desc()
+            .unwrap();
+        assert_eq!(view.Format, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        let list = host.new_list().unwrap();
+        let image = host_resource(target).unwrap();
+        // SAFETY: the device and resources are live, and structures have host layout.
+        unsafe {
+            let descriptors: ID3D12DescriptorHeap = host
+                .device
+                .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                    Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                    NumDescriptors: 1,
+                    ..Default::default()
+                })
+                .unwrap();
+            let rtv = descriptors.GetCPUDescriptorHandleForHeapStart();
+            host.device.CreateRenderTargetView(image, Some(&view), rtv);
+            list.list.ClearRenderTargetView(rtv, &color, None);
+            list.list.ResourceBarrier(&[crate::host::transition(
+                image,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+
+            let mut readback: Option<ID3D12Resource> = None;
+            host.device
+                .CreateCommittedResource(
+                    &D3D12_HEAP_PROPERTIES {
+                        Type: D3D12_HEAP_TYPE_READBACK,
+                        ..Default::default()
+                    },
+                    D3D12_HEAP_FLAG_NONE,
+                    &D3D12_RESOURCE_DESC {
+                        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                        Width: 512,
+                        Height: 1,
+                        DepthOrArraySize: 1,
+                        MipLevels: 1,
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
+                        },
+                        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                        ..Default::default()
+                    },
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut readback,
+                )
+                .unwrap();
+            let readback = readback.unwrap();
+            #[repr(C)]
+            struct Location {
+                resource: *mut std::ffi::c_void,
+                kind: u32,
+                footprint: PlacedFootprint,
+            }
+            let src = Location {
+                resource: image.as_raw(),
+                kind: 0,
+                footprint: PlacedFootprint {
+                    offset: 0,
+                    ..NO_FOOTPRINT
+                },
+            };
+            let dst = Location {
+                resource: readback.as_raw(),
+                kind: 1,
+                footprint: PlacedFootprint {
+                    offset: 0,
+                    format: RGBA16_FLOAT,
+                    width: 2,
+                    height: 2,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            };
+            list.list.CopyTextureRegion(
+                (&raw const dst).cast(),
+                0,
+                0,
+                0,
+                (&raw const src).cast(),
+                None,
+            );
+            list.close();
+            assert_eq!(host.execute_checked(&[&list]), None);
+            let mut mapped = std::ptr::null_mut();
+            readback.Map(0, None, Some(&mut mapped)).unwrap();
+            for y in 0..2 {
+                for x in 0..2 {
+                    let pixel = mapped.cast::<[u16; 4]>().add(y * 32 + x).read();
+                    assert_eq!(pixel, [0x3400, 0x4000, 0x4800, 0x3c00]);
+                }
+            }
+            readback.Unmap(0, None);
+        }
+        for image in [sampled, unordered, target] {
+            assert_eq!(slot::<Release>(image, 0x10)(image), 0);
+        }
     }
 
     #[cfg(windows)]

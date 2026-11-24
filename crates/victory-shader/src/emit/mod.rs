@@ -332,16 +332,25 @@ fn emit_target(
     options: TranslateOptions,
 ) -> Result<HostShader, ShaderError> {
     let original = emit_with_threading(c, native, p, st, io, res, host_waves, options);
-    if native.stage != HwStage::Cs
-        || !matches!(
-            original,
+    let retry = match (&original, native.stage) {
+        (
             Err(ShaderError::Unsupported {
                 what: "a lane-mask join of an untracked mask"
                     | "a lane mask holding lanes elsewhere read as data",
                 ..
-            })
-        )
-    {
+            }),
+            HwStage::Cs,
+        ) => true,
+        (
+            Err(ShaderError::Unsupported {
+                what: "a lane-mask join of an untracked mask",
+                ..
+            }),
+            HwStage::Ps,
+        ) => !p.wave64,
+        _ => false,
+    };
+    if !retry {
         return original;
     }
 
@@ -822,6 +831,80 @@ mod tests {
             validator::Validator::load(validator::Validator::default_path().as_deref())
         {
             validator.validate(&mut shader.dxil.clone()).unwrap();
+        }
+    }
+
+    #[test]
+    fn pixel_mask_join_retries_a_proven_lane_spill() {
+        let mut words = [
+            0x7d84_0080u32, // vcc = (v0 == 0)
+            0xd761_0002,
+            0x0001_026a, // v_writelane_b32 v2, vcc_lo, 1
+            0xbf06_8000, // s_cmp_eq_u32 s0, 0
+            0xbf85_0003,
+            0xd760_0004,
+            0x0001_0302, // v_readlane_b32 s4, v2, 1
+            0xbf82_0002,
+            0x7d84_0280, // alternate vcc = (v1 == 0)
+            0xbe84_036a, // s_mov_b32 s4, vcc_lo
+            0xd501_0003,
+            0x0012_0300, // join: v_cndmask_b32 v3, v0, v1, s4
+            0xf800_180f,
+            0x0303_0303, // export v3 in every channel
+            0xbf81_0000,
+        ];
+        let mut native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: false,
+            vgprs: 4,
+            layout: vec![crate::native::RootParam {
+                root: crate::native::RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data: 0,
+                slot: 1,
+            }],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![],
+                input_addr: 1 << 1,
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: vec![],
+        };
+        let bytes = constant_color();
+        let c = Container::parse(&bytes).unwrap();
+        for (reload_word, reload_matches) in [(0x0001_0302, true), (0x0001_0502, false)] {
+            words[6] = reload_word; // the second case reads an unspilled lane
+            native.code = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            let p = ir::build(&native.code, native.wave64, native.vgprs).unwrap();
+            let st = structure::structure(&p).unwrap();
+            let io = io::raise(&p, &native).unwrap();
+            let res = resource::track(&p, &native.layout, native.stage).unwrap();
+            let original =
+                emit_with_threading(&c, &native, &p, &st, &io, &res, None, Default::default());
+            assert!(matches!(
+                original,
+                Err(ShaderError::Unsupported {
+                    what: "a lane-mask join of an untracked mask",
+                    ..
+                })
+            ));
+            let translated = emit(&c, &native, &p, &st, &io, &res);
+            if reload_matches {
+                let shader = translated.unwrap();
+                #[cfg(windows)]
+                if let Ok(mut validator) =
+                    validator::Validator::load(validator::Validator::default_path().as_deref())
+                {
+                    validator.validate(&mut shader.dxil.clone()).unwrap();
+                }
+                assert!(!shader.dxil.is_empty());
+            } else {
+                assert!(translated.is_err());
+            }
         }
     }
 
