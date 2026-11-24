@@ -3097,6 +3097,7 @@ impl<'a> Lower<'a> {
             }
             Atom::Opaque(..) => Err("an opaque lane mask"),
             Atom::Constant(_) => Err("a constant lane mask"),
+            Atom::WaveBranch(_) => Err("a proof-only wave branch"),
         }
     }
 
