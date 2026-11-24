@@ -670,6 +670,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn direct_pixel_barycentrics_use_host_signature() {
+        // v0/v1 contain perspective I/J and v2/v3 linear I/J. Export
+        // both pairs directly, without v_interp to fold their uses away.
+        let words = [0xF800_180Fu32, 0x0302_0100, 0xBF81_0000];
+        let native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: false,
+            vgprs: 4,
+            layout: vec![],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![],
+                input_addr: (1 << 1) | (1 << 5),
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        };
+        let outputs = container::signature(
+            &[SigElement {
+                name: "SV_Target".into(),
+                index: 0,
+                kind: 16,
+                comp: 9,
+                interp: 0,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            }],
+            false,
+        );
+        let bytes = crate::dxbc::build(&[(FourCC::OSG1, &outputs)]);
+        let p = ir::build(&native.code, false, native.vgprs).unwrap();
+        let shader = emit(
+            &Container::parse(&bytes).unwrap(),
+            &native,
+            &p,
+            &structure::structure(&p).unwrap(),
+            &io::raise(&p, &native).unwrap(),
+            &resource::track(&p, &native.layout, native.stage).unwrap(),
+        )
+        .unwrap();
+        let container = Container::parse(&shader.dxil).unwrap();
+        let features = u64::from_le_bytes(
+            container
+                .part(FourCC::SFI0)
+                .unwrap()
+                .data
+                .try_into()
+                .unwrap(),
+        );
+        assert_eq!(features & 0x2_0000, 0x2_0000);
+        let inputs = container.part(FourCC::ISG1).unwrap().data;
+        assert_eq!(crate::dxbc::u32_at(inputs, 0).unwrap(), 2);
+        for index in 0..2 {
+            let at = 8 + index * 32;
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 8).unwrap(), index as u32);
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 12).unwrap(), 23);
+            assert_eq!(crate::dxbc::u32_at(inputs, at + 20).unwrap(), u32::MAX);
+            assert_eq!(inputs[at + 25], 0b110);
+        }
+        #[cfg(windows)]
+        {
+            let path = validator::Validator::default_path();
+            if let Ok(mut validator) = validator::Validator::load(path.as_deref()) {
+                validator.validate(&mut shader.dxil.clone()).unwrap();
+            }
+        }
+    }
+
     /// A pixel shader writing a constant colour.
     fn constant_color() -> Vec<u8> {
         let mut s = Shader::new(true);

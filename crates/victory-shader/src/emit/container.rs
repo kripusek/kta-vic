@@ -3,6 +3,8 @@
 //! program (`DXIL`), laid out as validator version 1.6 lays them out, plus
 //! the container hash that D3D12 checks.
 
+pub(crate) const BARYCENTRICS: u8 = 28;
+
 /// One signature element: one row (D3D12 links stages by semantic).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SigElement {
@@ -44,6 +46,7 @@ impl SigElement {
             18 => 68,
             19 => 67,
             20 => 69,
+            BARYCENTRICS => 23,
             30 => 25, // cull primitive
             _ => 0,
         }
@@ -161,6 +164,13 @@ pub(crate) fn psv(p: &Psv) -> Vec<u8> {
     u32s(&mut out, &[48]);
     let mut info = [0u8; 48];
     info[0] = u8::from(p.flag);
+    if p.stage == 0 {
+        info[1] = u8::from(
+            p.inputs
+                .iter()
+                .any(|e| e.kind == BARYCENTRICS && matches!(e.interp, 6 | 7)),
+        );
+    }
     let (min, max) = p.wave_size.map_or((0, u32::MAX), |n| (n, n));
     info[16..20].copy_from_slice(&min.to_le_bytes());
     info[20..24].copy_from_slice(&max.to_le_bytes());
