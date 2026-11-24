@@ -16,7 +16,8 @@
 //! guess; a pass the title runs only once and whose pipeline takes longer
 //! is lost.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -27,7 +28,7 @@ use super::host::{GraphicsState, HostPipeline};
 pub(crate) struct Pending {
     shaders: Vec<Arc<Shader>>,
     pub(crate) graphics: Option<Box<GraphicsState>>,
-    queued: AtomicBool,
+    queue_state: AtomicU8,
     made: OnceLock<Option<HostPipeline>>,
     /// What identifies it across runs (shader containers and state), and
     /// whether a draw has used it yet.
@@ -52,7 +53,7 @@ impl Pending {
         Pending {
             shaders,
             graphics,
-            queued: AtomicBool::new(false),
+            queue_state: AtomicU8::new(NOT_QUEUED),
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
@@ -97,6 +98,48 @@ static DONE: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 /// Waiting allowed per title frame, over all threads.
 const BUDGET: Duration = Duration::from_millis(500);
 
+/// The frame tag and outstanding/consumed wait time change together.
+struct FrameBudget {
+    state: Mutex<Option<(u64, Duration)>>,
+}
+
+impl FrameBudget {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(None),
+        }
+    }
+
+    fn reserve(&self, frame: u64) -> Duration {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let (active, used) = state.get_or_insert((frame, Duration::ZERO));
+        let advance = frame.wrapping_sub(*active);
+        if advance >= 1 << 63 {
+            // The caller took its frame snapshot before a newer waiter.
+            return Duration::ZERO;
+        }
+        if advance != 0 {
+            *active = frame;
+            *used = Duration::ZERO;
+        }
+        let available = BUDGET.saturating_sub(*used);
+        *used += available;
+        available
+    }
+
+    fn refund(&self, frame: u64, unused: Duration) {
+        if unused.is_zero() {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((active, used)) = &mut *state
+            && *active == frame
+        {
+            *used = used.saturating_sub(unused);
+        }
+    }
+}
+
 /// Pipelines queued and not made yet.
 static WAITING: AtomicU64 = AtomicU64::new(0);
 
@@ -109,7 +152,7 @@ pub(crate) fn waiting() -> u64 {
 /// queues it on first use.
 pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if p.made.get().is_none() {
-        start(p);
+        start(p, REQUESTED);
         wait(p, crate::frame::current());
     }
     let made = p.made.get()?.as_ref();
@@ -119,32 +162,23 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     made
 }
 
-/// Queues `p` for the workers, once.
-fn start(p: &Arc<Pending>) {
-    if !p.queued.swap(true, Ordering::Relaxed) {
-        PEAK.fetch_max(WAITING.fetch_add(1, Ordering::Relaxed) + 1, Ordering::Relaxed);
-        queue(p.clone());
-    }
-}
-
 /// At the title's creation of a pipeline: starts it at once if an earlier
 /// run drew with it (during loading, so the world's first frames find it).
 pub(crate) fn early(p: &Arc<Pending>) {
     if !p.shaders.is_empty() && super::library::wanted_early(&p.key) {
         super::library::EARLY.fetch_add(1, Ordering::Relaxed);
-        start(p);
+        start(p, EARLY);
     }
 }
 
 /// Waits for `p` while frame `frame` has budget left.
 fn wait(p: &Pending, frame: u64) {
-    static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
-    static WAITED_US: AtomicU64 = AtomicU64::new(0);
-    if FRAME.swap(frame, Ordering::Relaxed) != frame {
-        WAITED_US.store(0, Ordering::Relaxed);
-    }
-    let left = BUDGET.saturating_sub(Duration::from_micros(WAITED_US.load(Ordering::Relaxed)));
+    static BUDGET_STATE: FrameBudget = FrameBudget::new();
     let started = Instant::now();
+    let left = BUDGET_STATE.reserve(frame);
+    if left.is_zero() {
+        return;
+    }
     let (lock, done) = &DONE;
     let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
     while p.made.get().is_none() {
@@ -152,9 +186,13 @@ fn wait(p: &Pending, frame: u64) {
         if rest.is_zero() {
             break;
         }
-        held = done.wait_timeout(held, rest).unwrap_or_else(|e| e.into_inner()).0;
+        held = done
+            .wait_timeout(held, rest)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
     }
-    WAITED_US.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    drop(held);
+    BUDGET_STATE.refund(frame, left.saturating_sub(started.elapsed()));
 }
 
 static WORKER_LIMIT: OnceLock<std::num::NonZeroU8> = OnceLock::new();
@@ -169,21 +207,99 @@ fn worker_count(logical_processors: usize, limit: Option<std::num::NonZeroU8>) -
     limit.map_or(automatic, |n| automatic.min(usize::from(n.get())))
 }
 
-/// Hands `p` to the workers (half the logical processors by default), started
-/// on first use.
-fn queue(p: Arc<Pending>) {
-    static SENDER: OnceLock<std::sync::mpsc::Sender<Arc<Pending>>> = OnceLock::new();
-    let sender = SENDER.get_or_init(|| {
-        let (sender, receiver) = std::sync::mpsc::channel::<Arc<Pending>>();
-        let receiver = Arc::new(Mutex::new(receiver));
+const NOT_QUEUED: u8 = 0;
+const EARLY: u8 = 1;
+const REQUESTED: u8 = 2;
+const MAKING: u8 = 3;
+
+struct Queue {
+    early: VecDeque<Arc<Pending>>,
+    requested: VecDeque<Arc<Pending>>,
+}
+
+impl Queue {
+    const fn new() -> Self {
+        Self {
+            early: VecDeque::new(),
+            requested: VecDeque::new(),
+        }
+    }
+
+    /// Returns whether a changed queue entry represents newly queued work.
+    fn push(&mut self, p: &Arc<Pending>, priority: u8) -> Option<bool> {
+        let previous = p.queue_state.load(Ordering::Relaxed);
+        if previous >= priority {
+            return None;
+        }
+        p.queue_state.store(priority, Ordering::Relaxed);
+        if priority == REQUESTED {
+            self.requested.push_back(p.clone());
+        } else {
+            self.early.push_back(p.clone());
+        }
+        Some(previous == NOT_QUEUED)
+    }
+
+    fn pop(&mut self) -> Option<Arc<Pending>> {
+        let p = self.requested.pop_front().or_else(|| {
+            // A promoted pipeline is already owned by the requested queue
+            // or a worker. The speculative entry is no longer a job.
+            std::iter::from_fn(|| self.early.pop_front())
+                .find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
+        })?;
+        p.queue_state.store(MAKING, Ordering::Relaxed);
+        Some(p)
+    }
+}
+
+static QUEUE: Mutex<Queue> = Mutex::new(Queue::new());
+static AVAILABLE: Condvar = Condvar::new();
+
+/// Queue or promote a pipeline while it has yet to be claimed.
+fn start(p: &Arc<Pending>, priority: u8) {
+    if p.queue_state.load(Ordering::Relaxed) >= priority {
+        return;
+    }
+    if !workers() {
+        if p.queue_state.swap(MAKING, Ordering::Relaxed) == NOT_QUEUED {
+            p.make();
+        }
+        return;
+    }
+    let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(new) = queue.push(p, priority) {
+        if new {
+            PEAK.fetch_max(
+                WAITING.fetch_add(1, Ordering::Relaxed) + 1,
+                Ordering::Relaxed,
+            );
+        }
+        AVAILABLE.notify_one();
+    }
+}
+
+fn next() -> Arc<Pending> {
+    let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        if let Some(p) = queue.pop() {
+            return p;
+        }
+        queue = AVAILABLE.wait(queue).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
+/// Starts the background workers on first use, respecting the launch ceiling.
+fn workers() -> bool {
+    static RUNNING: OnceLock<bool> = OnceLock::new();
+    *RUNNING.get_or_init(|| {
+        let mut running = false;
         let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
         let workers = worker_count(logical, WORKER_LIMIT.get().copied());
         tracing::info!(workers, "background pipeline compiler started");
         for i in 0..workers {
-            let receiver = receiver.clone();
             let spawned = std::thread::Builder::new()
                 .name(format!("victory-pipelines-{i}"))
-                .spawn(move || {
+                .spawn(|| {
                     // Below the title's own threads (loading, recording).
                     // SAFETY: a plain call on our own thread.
                     unsafe {
@@ -191,9 +307,7 @@ fn queue(p: Arc<Pending>) {
                         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
                     }
                     loop {
-                        let next = receiver.lock().unwrap_or_else(|e| e.into_inner()).recv();
-                        let Ok(p) = next else { return };
-                        p.make();
+                        next().make();
                         if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
                             drained();
                         } else {
@@ -203,15 +317,12 @@ fn queue(p: Arc<Pending>) {
                 });
             if let Err(e) = spawned {
                 tracing::warn!(error = %e, "no pipeline worker");
+            } else {
+                running = true;
             }
         }
-        sender
-    });
-    if let Err(e) = sender.send(p) {
-        // No worker: made here instead.
-        e.0.make();
-        WAITING.fetch_sub(1, Ordering::Relaxed);
-    }
+        running
+    })
 }
 
 /// The most pipelines waiting at once since the workers last ran out.
@@ -244,13 +355,72 @@ mod tests {
         assert_eq!(worker_count(128, std::num::NonZeroU8::new(16)), 8);
     }
 
+    #[test]
+    fn demand_promotes_pending_work_without_requeueing_claimed_pipelines() {
+        let pending = || Arc::new(Pending::new(Vec::new(), None));
+        let first = pending();
+        let requested = pending();
+        let promoted = pending();
+        let last = pending();
+        let mut queue = Queue::new();
+        assert_eq!(queue.push(&first, EARLY), Some(true));
+        assert_eq!(queue.push(&promoted, EARLY), Some(true));
+        assert_eq!(queue.push(&last, EARLY), Some(true));
+        assert_eq!(queue.push(&requested, REQUESTED), Some(true));
+        assert_eq!(queue.push(&promoted, REQUESTED), Some(false));
+        assert_eq!(queue.push(&promoted, REQUESTED), None);
+
+        for expected in [&requested, &promoted, &first, &last] {
+            let claimed = queue.pop().unwrap();
+            assert!(Arc::ptr_eq(&claimed, expected));
+            assert_eq!(queue.push(&claimed, REQUESTED), None);
+        }
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn frame_budget_rejects_delayed_reservations_and_refunds() {
+        let budget = FrameBudget::new();
+        assert_eq!(budget.reserve(u64::MAX), BUDGET);
+        assert_eq!(budget.reserve(0), BUDGET);
+        assert_eq!(budget.reserve(u64::MAX), Duration::ZERO);
+        budget.refund(u64::MAX, BUDGET);
+        assert_eq!(budget.reserve(0), Duration::ZERO);
+        let unused = Duration::from_millis(3);
+        budget.refund(0, unused);
+        assert_eq!(budget.reserve(0), unused);
+    }
+
+    #[test]
+    fn concurrent_waiters_share_one_frame_budget() {
+        let budget = FrameBudget::new();
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|threads| {
+            let waiters: Vec<_> = (0..8)
+                .map(|_| {
+                    threads.spawn(|| {
+                        start.wait();
+                        budget.reserve(101)
+                    })
+                })
+                .collect();
+            assert_eq!(
+                waiters
+                    .into_iter()
+                    .map(|w| w.join().unwrap())
+                    .sum::<Duration>(),
+                BUDGET
+            );
+        });
+    }
+
     /// A first use queues the pipeline and, within the budget, gets the
     /// worker's answer (here: no host pipeline for no shaders).
     #[test]
     fn first_use_is_made_by_a_worker() {
         let p = Arc::new(Pending::new(Vec::new(), None));
         assert!(ready(&p).is_none());
-        assert!(p.queued.load(Ordering::Relaxed));
+        assert_ne!(p.queue_state.load(Ordering::Relaxed), NOT_QUEUED);
         let started = Instant::now();
         while p.made.get().is_none() && started.elapsed() < Duration::from_secs(10) {
             std::thread::yield_now();
