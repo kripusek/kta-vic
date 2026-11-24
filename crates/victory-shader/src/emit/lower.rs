@@ -4520,6 +4520,7 @@ impl<'a> Lower<'a> {
     // stops the program.
     fn descriptor_data(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
         const OTHER: Why = "a descriptor's address or format read as data";
+        const CUBE_DEPTH: Why = "a cube descriptor's depth read as data";
         let Fields::Smem {
             data: Some(Operand::Scalar { code, .. }),
             ..
@@ -4593,6 +4594,7 @@ impl<'a> Lower<'a> {
                     0 => 1,
                     1 => 2,
                     2 => 4,
+                    3 if !uav => 5,
                     4 => 6,
                     5 => 7,
                     _ => return Err("an image dimension (cube or MSAA)"),
@@ -4647,17 +4649,18 @@ impl<'a> Lower<'a> {
                 let one = self.s.m.i32(1);
                 let w = field(self, 0);
                 let (height, depth) = match kind {
-                    1 => (one, one),
-                    2 => (field(self, 1), one),
-                    6 => (one, field(self, 1)),
-                    _ => (field(self, 1), field(self, 2)),
+                    1 => (one, Some(one)),
+                    2 => (field(self, 1), Some(one)),
+                    5 => (field(self, 1), None),
+                    6 => (one, Some(field(self, 1))),
+                    _ => (field(self, 1), Some(field(self, 2))),
                 };
                 let levels = if uav { one } else { field(self, 3) };
                 let less = |l: &mut Self, x: V| l.s.m.bin(c, Bin::Sub, x, one);
                 let (w, height, depth, levels) = (
                     less(self, w),
                     less(self, height),
-                    less(self, depth),
+                    depth.map(|d| less(self, d)),
                     less(self, levels),
                 );
                 let k = |l: &mut Self, v: u32| l.s.m.i32(v);
@@ -4673,11 +4676,15 @@ impl<'a> Lower<'a> {
                 let hi = self.s.m.bin(c, Bin::And, hi, mask);
                 let ht = self.s.m.bin(c, Bin::Shl, height, k14);
                 let d2 = self.s.m.bin(c, Bin::Or, hi, ht);
-                let ty = [0, 8, 9, 0, 10, 0, 12, 13][kind as usize];
+                let ty = [0, 8, 9, 0, 10, 11, 12, 13][kind as usize];
                 let base = k(self, 0xFAC | ty << 28);
                 let last = self.s.m.bin(c, Bin::Shl, levels, k16);
                 let d3 = self.s.m.bin(c, Bin::Or, base, last);
-                vec![(1, d1), (2, d2), (3, d3), (4, depth)]
+                let mut words = vec![(1, d1), (2, d2), (3, d3)];
+                if let Some(depth) = depth {
+                    words.push((4, depth));
+                }
+                words
             }
             None => vec![(2, field(self, 0))],
         };
@@ -4687,7 +4694,12 @@ impl<'a> Lower<'a> {
                 Some(&(_, x)) => self.write(inst, Reg::S(code + k as u8), x, None),
                 None => {
                     if let Some(v) = inst.write(Reg::S(code + k as u8)) {
-                        self.vals.insert(v, Val::Missing(OTHER));
+                        let why = if image == Some(5) && rel == 4 {
+                            CUBE_DEPTH
+                        } else {
+                            OTHER
+                        };
+                        self.vals.insert(v, Val::Missing(why));
                     }
                 }
             }
@@ -8710,6 +8722,69 @@ mod select_tests {
             }),
             code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
         }
+    }
+
+    fn image_descriptor_words(
+        cube: bool,
+        depth: bool,
+    ) -> Result<super::super::HostShader, crate::ShaderError> {
+        use crate::ir;
+        let mut words = [
+            0xbe81_0380, // s1 = table address high
+            0xf40c_0100, 0xfa00_0000, // s[4:11] = image SRV
+            0xf408_0300, 0xfa00_0020, // s[12:15] = output UAV
+            0x7e04_0280, // v2 = mip zero / byte offset zero
+            0xf038_0318, 0x0001_0402, // image_get_resinfo v[4:5], v2, s[4:11], cube
+            0x7e00_0207, // v0 = image word 3 (type and mip levels)
+            0x7e02_0206, // v1 = image word 2 (width and height)
+            0xe070_1000, 0x8003_0002, // store v0 at byte 0
+            0xe070_1004, 0x8003_0102, // store v1 at byte 4
+            0xbf81_0000,
+        ];
+        let bytes = crate::dxbc::build(&[]);
+        let c = Container::parse(&bytes).unwrap();
+        if !cube {
+            words[6] = 0xf038_0308; // 2D instead of cube
+        }
+        if depth {
+            words[9] = 0x7e02_0208; // v1 = image word 4
+        }
+        let mut native = compute_fixture(&words, 0);
+        native.wave64 = false;
+        native.vgprs = 6;
+        native.io = crate::native::StageIo::Cs(ComputeIo {
+            rsrc2: 2,
+            threads: [1, 1, 1],
+        });
+        let mut image_metadata = native.used[0];
+        image_metadata.kind = ResourceType::Srv;
+        image_metadata.dwords = 8;
+        native.used[0].table_offset_dwords = 8;
+        native.used.insert(0, image_metadata);
+        let p = ir::build(&native.code, false, native.vgprs).unwrap();
+        let st = crate::structure::structure(&p).unwrap();
+        let io = crate::io::raise(&p, &native).unwrap();
+        let res = crate::resource::track(&p, &native.layout, native.stage).unwrap();
+        emit(&c, &native, &p, &st, &io, &res)
+    }
+
+    #[test]
+    fn cube_descriptor_size_and_type_reach_a_uav_store() {
+        for (cube, depth) in [(false, true), (true, false)] {
+            let mut shader = image_descriptor_words(cube, depth).unwrap();
+            validate_dxil(&mut shader.dxil);
+        }
+    }
+
+    #[test]
+    fn cube_descriptor_depth_is_declined() {
+        assert!(matches!(
+            image_descriptor_words(true, true),
+            Err(crate::ShaderError::Unsupported {
+                what: "a cube descriptor's depth read as data",
+                ..
+            }),
+        ));
     }
 
     #[test]
