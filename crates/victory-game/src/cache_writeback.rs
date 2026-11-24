@@ -1,6 +1,6 @@
 //! Native cache-line writeback for Series 1.0.2.1 on x86 hosts without CLWB.
 
-const SERIES_1021: &str = "b99f876b74d4a77f03af5f878223b27bd647b5c35a79d5decd9f716504239e93";
+use crate::SERIES_1021;
 
 // Each RVA is an instruction boundary and the target of its loop's back edge.
 const SITES: &[(u32, &[u8])] = &[
