@@ -220,6 +220,28 @@ fn refuses_waterfall_when_the_texture_load_overwrites_saved_exec() {
 }
 
 #[test]
+fn a_later_exec_filter_does_not_hide_conflicting_or_missing_sampler_writes() {
+    // Neither arm can assume the result of a later, independent lane test.
+    for changed in [None, Some((13, 0xfa00_0020)), Some((17, 0xbf80_0000))] {
+        let mut words = MIXED_MASK.to_vec();
+        if let Some((index, word)) = changed {
+            words[index] = word;
+        }
+        words.splice(19..19, [0x7d88_0287, 0xbe96_246a]);
+        // Restore the mask saved by the independent filter after the waterfall.
+        words.insert(words.len() - 1, 0xbefe_0416);
+        let (p, mut code) = synthetic(&words);
+        let original = code.clone();
+        let expected = usize::from(changed.is_none());
+        assert_eq!(
+            prove_and_rewrite(&p, &mut code, 24, &[], None),
+            Some((expected, false)),
+        );
+        assert_eq!(code == original, changed.is_some());
+    }
+}
+
+#[test]
 fn refuses_incomplete_sampler_or_control_proofs() {
     let cases = [
         (13, 0xfa00_0020), // different slot in the second arm
@@ -789,4 +811,32 @@ fn complementary_sampler_program_reaches_dxil_validation() {
         validator.validate(&mut shader.dxil.clone()).unwrap();
     }
     assert!(!shader.dxil.is_empty());
+}
+
+#[test]
+fn independent_branches_do_not_multiply_sampler_predecessor_visits() {
+    const BRANCHES: usize = 6;
+    let mut words = MIXED_MASK.to_vec();
+    // These independent scalar diamonds execute after both sampler writes.
+    // Neither arm writes the sampler, EXEC, or one of the later predicates.
+    words.splice(
+        19..19,
+        (40..40 + BRANCHES as u32).flat_map(|sgpr| {
+            [
+                0xbf06_8000 | sgpr, // s_cmp_eq_u32 sN, 0
+                0xbf84_0001,        // s_cbranch_scc0 +1
+                0xbf80_0000,        // s_nop 0
+            ]
+        }),
+    );
+    let (p, _) = synthetic(&words);
+    let header = p
+        .blocks
+        .iter()
+        .position(|b| b.offset == (20 + 3 * BRANCHES) * 4)
+        .unwrap();
+    let mut proof = Proof::new(&p, 24).unwrap();
+    // The predecessor walk charges one unit for each visit it must prove.
+    let mut budget = 128;
+    assert_eq!(proof.sampler_at(header, &mut budget), Some(1));
 }

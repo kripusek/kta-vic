@@ -371,6 +371,13 @@ impl<'a> Proof<'a> {
     }
 
     fn prove_word(&mut self, block: usize, mut needed: Bool, walk: &mut WordWalk) -> Option<()> {
+        // Earlier writes must cover every lane that a later branch might need.
+        // Keeping later branch choices here multiplies equivalent predecessor
+        // queries and can exhaust the decision diagram on sequential waterfalls.
+        needed = self
+            .st
+            .bools
+            .forget(needed, self.order_index[block] + 1, &mut Map::default());
         let prior = walk.proved.get(&block).copied().unwrap_or(Bool::FALSE);
         let unproved = self.st.bools.not(prior);
         needed = self.st.bools.and(needed, unproved);
