@@ -577,11 +577,16 @@ extern "system" fn copy_texture_region(
             let Some(texture) = crate::resource::host_resource(src.resource) else {
                 return;
             };
-            ensure_mips(list, src.resource, COPY_SOURCE, color_mip(src.resource, src.footprint.offset as u32));
+            let mips = color_mip(src.resource, src.footprint.offset as u32);
+            ensure_mips(list, src.resource, COPY_SOURCE, mips);
             from.resource = texture.as_raw().cast_const().cast();
         }
         // For a subresource location, the low word of the footprint union is its index.
-        let mips = if dst.kind == 0 { color_mip(dst.resource, dst.footprint.offset as u32) } else { None };
+        let mips = if dst.kind == 0 {
+            color_mip(dst.resource, dst.footprint.offset as u32)
+        } else {
+            None
+        };
         ensure_mips(list, dst.resource, COPY_DEST, mips);
         crate::texture::host_written(dst.resource);
         let mut to_location = dst;

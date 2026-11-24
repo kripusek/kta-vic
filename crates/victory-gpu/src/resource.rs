@@ -894,18 +894,6 @@ impl Drop for HostTexture {
     }
 }
 
-/// Moves the host texture to `wanted` (a host texture state); the host
-/// resource and the state it leaves, if that is a change.
-#[cfg(all(windows, test))]
-pub(crate) fn host_transition(this: This, wanted: u32) -> Option<(*mut c_void, u32)> {
-    use windows::core::Interface;
-    let host = resource(this).host.as_ref()?;
-    let before = host
-        .state
-        .swap(wanted, std::sync::atomic::Ordering::Relaxed);
-    (before != wanted).then(|| (host.texture.as_raw(), before))
-}
-
 /// The host GPU's copy of a title resource, if it has one.
 #[cfg(windows)]
 pub(crate) fn host_resource<'a>(
@@ -2249,7 +2237,10 @@ mod tests {
         let iid = &RESOURCE_IIDS[0];
         const COPY_DEST: u32 = 0x400;
         let (mut image, mut source) = (null, null);
-        let rgba = ResourceDesc { flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 as u32, ..texture(4, 4, 28, 2) };
+        let rgba = ResourceDesc {
+            flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 as u32,
+            ..texture(4, 4, 28, 2)
+        };
         assert_eq!(
             create_committed(
                 null,
@@ -2352,12 +2343,16 @@ mod tests {
         let region = [1u32, 1, 0, 3, 3, 1];
         slot::<Copy>(list, 0x80)(list, &mip_one, 0, 0, 0, &to, region.as_ptr().cast());
         #[cfg(feature = "diagnostics")]
-        if let Ok(debug) = crate::list::host_list(list).unwrap().list.cast::<ID3D12DebugCommandList>() {
+        if let Ok(debug) = crate::list::host_list(list)
+            .unwrap().list.cast::<ID3D12DebugCommandList>()
+        {
             // SAFETY: the list just recorded a copy between these live subresources.
             unsafe {
                 let color = host_resource(image).unwrap();
-                assert!(debug.AssertResourceState(color, 0, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32).as_bool());
-                assert!(debug.AssertResourceState(color, 1, D3D12_RESOURCE_STATE_COPY_DEST.0 as u32).as_bool());
+                let src = D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32;
+                let dst = D3D12_RESOURCE_STATE_COPY_DEST.0 as u32;
+                assert!(debug.AssertResourceState(color, 0, src).as_bool());
+                assert!(debug.AssertResourceState(color, 1, dst).as_bool());
             }
         }
         slot::<extern "system" fn(This) -> HRESULT>(list, 0x48)(list);
@@ -2427,7 +2422,9 @@ mod tests {
                 ..out_to
             };
             let mip_src = Location { footprint: mip_one.footprint, ..out_from };
-            back.list.CopyTextureRegion((&raw const mip_dst).cast(), 0, 0, 0, (&raw const mip_src).cast(), None);
+            back.list.CopyTextureRegion(
+                (&raw const mip_dst).cast(), 0, 0, 0, (&raw const mip_src).cast(), None,
+            );
         }
         back.close();
         assert_eq!(host.execute_checked(&[&back]), None);
