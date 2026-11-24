@@ -421,12 +421,6 @@ extern "system" fn present(
             if index == 0 {
                 primary = resource;
             }
-            if textures
-                .iter()
-                .any(|(previous, _)| previous.texture == texture.texture)
-            {
-                continue;
-            }
             let geometry = if plane.source_rects.is_null() && plane.dest_placement.is_null() {
                 crate::host::PresentGeometry::default()
             } else if plane.count != 1 {
@@ -469,7 +463,11 @@ extern "system" fn present(
                     }
                 }
             };
-            textures.push((texture, geometry));
+            if !textures.iter().any(|(previous, previous_geometry)| {
+                previous.texture == texture.texture && *previous_geometry == geometry
+            }) {
+                textures.push((texture, geometry));
+            }
         }
         if !textures.is_empty() {
             if let Some((plane, reason)) = unsupported {

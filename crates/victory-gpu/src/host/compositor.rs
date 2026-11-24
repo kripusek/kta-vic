@@ -281,7 +281,10 @@ pub(super) fn prepare_planes<'a>(
             || (desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE).0 != 0
             || desc.Width == 0
             || desc.Height == 0
-            || prepared.iter().any(|previous| previous.texture == texture)
+            || prepared.iter().any(|previous| {
+                previous.texture == texture
+                    && (previous.geometry == geometry || previous.state.0 as u32 != state)
+            })
         {
             return None;
         }
@@ -380,7 +383,11 @@ impl Compositor {
                     }),
                     handle,
                 );
-                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                    && !planes[..i]
+                        .iter()
+                        .any(|earlier| earlier.texture == plane.texture)
+                {
                     before.push(transition(
                         plane.texture,
                         plane.state,
@@ -424,8 +431,12 @@ impl Compositor {
                 list.DrawInstanced(3, 1, 0, 0);
             }
             let mut after = Vec::with_capacity(count);
-            for plane in planes {
-                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+            for (i, plane) in planes.iter().enumerate() {
+                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                    && !planes[..i]
+                        .iter()
+                        .any(|earlier| earlier.texture == plane.texture)
+                {
                     after.push(transition(
                         plane.texture,
                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -844,7 +855,6 @@ mod tests {
         let rt = D3D12_RESOURCE_STATE_RENDER_TARGET;
         let base = target(1920, 1080, rt);
         let overlay = target(3840, 2160, rt);
-        let top = target(2, 2, rt);
         let back = target(3840, 2160, D3D12_RESOURCE_STATE_COMMON);
         let run = host.new_list().unwrap();
         let list = &run.list;
@@ -854,13 +864,22 @@ mod tests {
             right: 1040,
             bottom: 784,
         };
-        // SAFETY: the three source textures and the open list are live.
+        // SAFETY: the source textures and the open list are live.
         unsafe {
             list.ClearRenderTargetView(host.rtv(Some(&base), None), &[0.0, 0.5, 0.0, 1.0], None);
             let overlay_rtv = host.rtv(Some(&overlay), None);
             list.ClearRenderTargetView(overlay_rtv, &[1.0, 0.0, 1.0, 1.0], None);
             list.ClearRenderTargetView(overlay_rtv, &[0.0, 0.0, 0.5, 0.5], Some(&[crop]));
-            list.ClearRenderTargetView(host.rtv(Some(&top), None), &[0.5, 0.0, 0.0, 0.5], None);
+            list.ClearRenderTargetView(
+                overlay_rtv,
+                &[0.5, 0.0, 0.0, 0.5],
+                Some(&[RECT {
+                    left: 2048,
+                    top: 1024,
+                    right: 2050,
+                    bottom: 1026,
+                }]),
+            );
         }
         let input = [
             (
@@ -880,10 +899,10 @@ mod tests {
                 },
             ),
             (
-                &top,
+                &overlay,
                 rt.0 as u32,
                 PresentGeometry {
-                    source: None,
+                    source: Some([2048, 1024, 2050, 1026]),
                     destination: [0.5, 0.5, 0.625, 0.625],
                 },
             ),
