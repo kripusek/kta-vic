@@ -343,10 +343,23 @@ const STAMPS: u32 = 4096;
 #[cfg(feature = "diagnostics")]
 type Note = (String, Option<(u64, u64)>);
 
-type States = std::collections::HashMap<
-    usize,
-    (u32, u32, std::sync::Arc<crate::resource::HostTexture>),
->;
+type States = std::collections::HashMap<usize, TrackedTexture>;
+
+struct TrackedTexture {
+    first: u32,
+    last: u32,
+    copy: std::sync::Arc<crate::resource::HostTexture>,
+    /// Subresources temporarily in a different state from `last`.
+    mips: std::collections::BTreeMap<u32, u32>,
+}
+
+impl TrackedTexture {
+    fn unify(&mut self, mut record: impl FnMut(&ID3D12Resource, u32, u32, u32)) {
+        for (mip, before) in std::mem::take(&mut self.mips) {
+            record(&self.copy.texture, mip, before, self.last);
+        }
+    }
+}
 
 /// Whether device-removed data is on (`VICTORY_D3D12_DRED`, diagnostics
 /// builds).
@@ -933,6 +946,24 @@ impl HostList {
     }
 
     pub(crate) fn close(&self) {
+        // The submission prelude and presentation use one state per texture.
+        let mut barriers = Vec::new();
+        let mut states = self.states.lock().unwrap_or_else(|e| e.into_inner());
+        for state in states.values_mut() {
+            state.unify(|texture, mip, before, after| {
+                barriers.push(transition_subresource(
+                    texture,
+                    mip,
+                    D3D12_RESOURCE_STATES(before as i32),
+                    D3D12_RESOURCE_STATES(after as i32),
+                ));
+            });
+        }
+        drop(states);
+        if !barriers.is_empty() {
+            // SAFETY: an open list and resources held by the tracker.
+            unsafe { self.list.ResourceBarrier(&barriers) };
+        }
         #[cfg(feature = "diagnostics")]
         if let Some((heap, back)) = self.stamps() {
             let count = (self.notes.lock().unwrap_or_else(|e| e.into_inner()).len() as u32).min(STAMPS - 1);
@@ -973,27 +1004,50 @@ impl HostList {
         }
     }
 
-    /// Moves a title texture's host copy to `wanted` (a host state) in this
-    /// list: the host texture and the state it leaves, if that is a change.
-    /// The list's first use of a texture records nothing: its prelude brings
-    /// the texture there at submission.
+    /// Records the state changes required by a texture use. The first use
+    /// sets the uniform state chosen by the submission prelude.
     pub(crate) fn transition(
         &self,
         resource: crate::object::This,
         wanted: u32,
-    ) -> Option<(&'static ID3D12Resource, u32)> {
-        let texture = crate::resource::host_resource(resource)?;
-        let copy = crate::resource::host_copy(resource)?;
-        let wanted = legal_state(texture, wanted);
+        mips: Option<std::ops::Range<u32>>,
+        mut record: impl FnMut(&ID3D12Resource, u32, u32, u32),
+    ) {
+        let Some(copy) = crate::resource::host_copy(resource) else {
+            return;
+        };
+        let wanted = legal_state(&copy.texture, wanted);
         let mut states = self.states.lock().unwrap_or_else(|e| e.into_inner());
-        match states.entry(std::sync::Arc::as_ptr(&copy) as usize) {
-            std::collections::hash_map::Entry::Vacant(v) => {
-                v.insert((wanted, wanted, copy));
-                None
+        let state = states
+            .entry(std::sync::Arc::as_ptr(&copy) as usize)
+            .or_insert_with(|| TrackedTexture {
+                first: wanted,
+                last: wanted,
+                copy,
+                mips: Default::default(),
+            });
+        if let Some(mips) = mips {
+            for mip in mips {
+                let before = if wanted == state.last {
+                    state.mips.remove(&mip)
+                } else {
+                    state.mips.insert(mip, wanted)
+                }
+                .unwrap_or(state.last);
+                if before != wanted {
+                    record(&state.copy.texture, mip, before, wanted);
+                }
             }
-            std::collections::hash_map::Entry::Occupied(mut o) => {
-                let before = std::mem::replace(&mut o.get_mut().1, wanted);
-                (before != wanted).then_some((texture, before))
+        } else {
+            state.unify(&mut record);
+            let before = std::mem::replace(&mut state.last, wanted);
+            if before != wanted {
+                record(
+                    &state.copy.texture,
+                    D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    before,
+                    wanted,
+                );
             }
         }
     }
@@ -1005,13 +1059,13 @@ impl HostList {
         let states = self.states.lock().unwrap_or_else(|e| e.into_inner());
         let barriers: Vec<D3D12_RESOURCE_BARRIER> = states
             .values()
-            .filter_map(|(first, last, copy)| {
-                let real = copy.state.swap(*last, Ordering::Relaxed);
-                (real != *first).then(|| {
+            .filter_map(|state| {
+                let real = state.copy.state.swap(state.last, Ordering::Relaxed);
+                (real != state.first).then(|| {
                     transition(
-                        &copy.texture,
+                        &state.copy.texture,
                         D3D12_RESOURCE_STATES(real as i32),
-                        D3D12_RESOURCE_STATES(*first as i32),
+                        D3D12_RESOURCE_STATES(state.first as i32),
                     )
                 })
             })
@@ -2327,6 +2381,31 @@ pub(crate) fn transition(
     before: D3D12_RESOURCE_STATES,
     after: D3D12_RESOURCE_STATES,
 ) -> D3D12_RESOURCE_BARRIER {
+    transition_subresource(
+        resource,
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        before,
+        after,
+    )
+}
+
+/// Mip indices directly address the first plane of these color targets.
+pub(crate) fn color_mip_count(texture: &ID3D12Resource) -> Option<u32> {
+    // SAFETY: the host texture is live.
+    let desc = unsafe { texture.GetDesc() };
+    (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && desc.DepthOrArraySize == 1
+        && desc.MipLevels > 1
+        && desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))
+    .then_some(u32::from(desc.MipLevels))
+}
+
+pub(crate) fn transition_subresource(
+    resource: &ID3D12Resource,
+    subresource: u32,
+    before: D3D12_RESOURCE_STATES,
+    after: D3D12_RESOURCE_STATES,
+) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -2334,7 +2413,7 @@ pub(crate) fn transition(
             Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
                 // SAFETY: a borrowed pointer; the barrier never releases it.
                 pResource: unsafe { std::mem::transmute_copy(resource) },
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                Subresource: subresource,
                 StateBefore: before,
                 StateAfter: after,
             }),
