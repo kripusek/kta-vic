@@ -362,22 +362,22 @@ impl TrackedTexture {
     }
 }
 
-/// Whether device-removed data is on (`VICTORY_D3D12_DRED`, diagnostics
-/// builds).
+/// Whether device-removed data is on (enabled by default; set `VICTORY_D3D12_DRED=0` to disable).
 pub(crate) fn dred_on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_DRED").is_some()
+        std::env::var_os("VICTORY_D3D12_DRED").as_deref() != Some(std::ffi::OsStr::new("0"))
+            || std::env::var_os("VICTORY_D3D12_DEBUG").is_some()
     })
 }
 
-/// Whether each list of a submission runs and is timed on its own, slow
-/// ones logged with their commands (`VICTORY_GPU_TIMING`, diagnostics
-/// builds; the commands are noted with `VICTORY_D3D12_DRED` on).
+/// Whether each list of a submission runs on its own (enabled by default
+/// to avoid multi-list Windows TDR timeouts; set `VICTORY_GPU_TIMING=0` to disable).
 fn timing() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_GPU_TIMING").is_some()
+        std::env::var_os("VICTORY_GPU_TIMING").as_deref() != Some(std::ffi::OsStr::new("0"))
+            || std::env::var_os("VICTORY_SAFE_SUBMIT").is_some()
     })
 }
 
@@ -460,7 +460,7 @@ struct Deferred {
 
 impl Host {
     fn poll_submission(&self, value: u64) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             // SAFETY: a live fence; UINT64_MAX is D3D12's device removal sentinel.
             let completed = unsafe { self.fence.GetCompletedValue() };
