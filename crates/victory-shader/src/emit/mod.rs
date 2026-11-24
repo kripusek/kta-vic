@@ -1170,20 +1170,43 @@ mod tests {
     /// leaving the original 1.0 bit pattern for the color export.
     #[test]
     fn an_f16_interpolation_preserves_its_old_high_half() {
-        let words = [
+        check_f16_interpolation_high_half(false);
+    }
+
+    #[test]
+    fn a_guarded_f16_fma_requires_the_entire_old_interpolation_result() {
+        check_f16_interpolation_high_half(true);
+    }
+
+    fn check_f16_interpolation_high_half(guarded_fma: bool) {
+        let mut words = vec![
             0x7E16_02F2u32, // v_mov_b32 v11, 1.0 (initial high bits)
             0x7E20_0280,    // v_mov_b32 v16, 0
             0xD742_000B,
             0x0002_0102, // v_interp_p1ll_f16 v11, v0, attr2.x high
-            0xD75A_000B,
-            0x042E_0302, // v_interp_p2_f16 v15, v1, attr2.x, v11 high
+        ];
+        if guarded_fma {
+            words.extend([
+                0x7E10_0280, // v_mov_b32 v8, 0
+                0xD75A_000F,
+                0x042E_0302, // v_interp_p2_f16 v15, v1, attr2.x, v11 high
+                0x7D84_0080, // v_cmp_eq_u32 vcc, 0, v0
+                0xBE88_246A, // s_and_saveexec_b64 s[8:9], vcc
+                0xCC21_000B,
+                0x0A02_2108, // v_fma_mixlo_f16 v11, sel_lo(v8), v16, 0
+                0xBEFE_0408, // s_mov_b64 exec, s[8:9]
+            ]);
+        } else {
+            words.extend([0xD75A_000B, 0x042E_0302]); // v_interp_p2_f16 v11, v1, attr2.x, v11 high
+        }
+        words.extend([
             0xF800_1801,
             0x0000_000B, // exp mrt0, v11, off, off, off done vm
             0xBF81_0000, // s_endpgm
-        ];
+        ]);
         let native = NativeProgram {
             stage: HwStage::Ps,
-            wave64: false,
+            wave64: guarded_fma,
             vgprs: 17,
             layout: vec![],
             used: vec![],
@@ -1237,7 +1260,22 @@ mod tests {
         let res = resource::track(&p, &native.layout, native.stage).unwrap();
         let io = io::raise(&p, &native).unwrap();
         let st = structure::structure(&p).unwrap();
-        let mut host = emit(&c, &native, &p, &st, &io, &res).unwrap();
+        let emitted = emit(&c, &native, &p, &st, &io, &res);
+        if guarded_fma {
+            assert!(
+                matches!(
+                    emitted,
+                    Err(crate::ShaderError::Unsupported {
+                        offset: 48,
+                        what: "the first half of an interpolation",
+                    })
+                ),
+                "guarded result: {:?}",
+                emitted.as_ref().err(),
+            );
+            return;
+        }
+        let mut host = emitted.unwrap();
         #[cfg(windows)]
         if let Ok(mut v) = super::validator::Validator::load(
             super::validator::Validator::default_path().as_deref(),

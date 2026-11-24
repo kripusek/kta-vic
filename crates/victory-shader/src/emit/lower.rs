@@ -5672,7 +5672,8 @@ impl<'a> Lower<'a> {
                 let Some(Operand::Vector { reg, .. }) = v.dst else {
                     return Err("a mixed-precision result");
                 };
-                let old = if name == "v_fma_mixlo_f16" {
+                // A partial-EXEC write needs the entire old value for inactive lanes.
+                let old = if name == "v_fma_mixlo_f16" && guard.is_none() {
                     self.preserved_high(inst, reg)?
                 } else {
                     match inst.read(Reg::V(reg)) {
