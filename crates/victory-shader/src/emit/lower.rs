@@ -64,20 +64,32 @@ enum Stop {
 const NONLOCAL_MASK: Why = "a lane mask holding lanes elsewhere read as data";
 const UNTRACKED_SELECT: Why = "a select on an untracked mask";
 
+#[cfg(test)]
 pub(crate) fn lower(parts: &Parts) -> Result<Lowered, ShaderError> {
-    match lower_program(parts, false) {
+    lower_with_dead_spills(parts, &HashSet::new())
+}
+
+pub(crate) fn lower_with_dead_spills(
+    parts: &Parts,
+    dead_spills: &HashSet<Site>,
+) -> Result<Lowered, ShaderError> {
+    match lower_program(parts, false, dead_spills) {
         Err(ShaderError::Unsupported {
             what: UNTRACKED_SELECT | NONLOCAL_MASK,
             ..
-        }) if parts.native.stage == HwStage::Cs => lower_program(parts, true),
+        }) if parts.native.stage == HwStage::Cs => lower_program(parts, true, dead_spills),
         result => result,
     }
 }
 
-fn lower_program(parts: &Parts, numeric_masks: bool) -> Result<Lowered, ShaderError> {
+fn lower_program(
+    parts: &Parts,
+    numeric_masks: bool,
+    dead_spills: &HashSet<Site>,
+) -> Result<Lowered, ShaderError> {
     let mut bad = HashMap::new();
     loop {
-        match Lower::new(parts, &bad, numeric_masks).run() {
+        match Lower::new(parts, &bad, numeric_masks, dead_spills).run() {
             Ok(l) => return Ok(l),
             Err(Stop::Retry(v, why)) => {
                 if bad.insert(v, why).is_some() {
@@ -255,6 +267,7 @@ struct Lower<'a> {
     abort: Option<usize>,
     /// `v_readlane_b32` sites reading an SGPR spilled via `v_writelane_b32`,
     /// resolved directly in SSA without wave operations.
+    dead_spills: &'a HashSet<Site>,
     resolved_reads: HashMap<Site, Spill>,
     /// `v_writelane_b32` sites whose VGPR result is consumed only by resolved
     /// `v_readlane_b32` sites (or other pure spill writes/phis).
@@ -1014,7 +1027,12 @@ impl SubDword {
 }
 
 impl<'a> Lower<'a> {
-    fn new(x: &'a Parts<'a>, bad: &'a HashMap<Value, Why>, numeric_masks: bool) -> Self {
+    fn new(
+        x: &'a Parts<'a>,
+        bad: &'a HashMap<Value, Why>,
+        numeric_masks: bool,
+        dead_spills: &'a HashSet<Site>,
+    ) -> Self {
         let p = x.p;
         let mut phi_at = HashMap::new();
         for (b, block) in p.blocks.iter().enumerate() {
@@ -1071,7 +1089,8 @@ impl<'a> Lower<'a> {
                 block.insts.iter().enumerate().any(|(idx, i)| {
                     let site = (b, idx);
                     let n = i.name();
-                    if (n == "v_readlane_b32" && resolved_reads.contains_key(&site))
+                    if dead_spills.contains(&site)
+                        || (n == "v_readlane_b32" && resolved_reads.contains_key(&site))
                         || (n == "v_writelane_b32" && pure_spill_writes.contains(&site))
                     {
                         return false;
@@ -1162,7 +1181,9 @@ impl<'a> Lower<'a> {
                     });
                     let has_unresolved_readlane = p.blocks.iter().enumerate().any(|(b, blk)| {
                         blk.insts.iter().enumerate().any(|(i, inst)| {
-                            inst.name() == "v_readlane_b32" && !spills.contains_key(&(b, i))
+                            inst.name() == "v_readlane_b32"
+                                && !spills.contains_key(&(b, i))
+                                && !dead_spills.contains(&(b, i))
                         })
                     });
                     let need_emu =
@@ -1346,6 +1367,7 @@ impl<'a> Lower<'a> {
             code_table: None,
             counters: HashMap::new(),
             abort: None,
+            dead_spills,
             resolved_reads,
             pure_spill_writes,
         }
@@ -1916,6 +1938,9 @@ impl<'a> Lower<'a> {
     /// An instruction inside a whole-wave section: the values that leave
     /// the section are made from what the simulation found them to be.
     fn section_inst(&mut self, b: usize, i: usize, start: usize) {
+        if self.dead_spills.contains(&(b, i)) {
+            return;
+        }
         const UNKNOWN: Why = "a whole-wave section step the simulation does not follow";
         let inst = &self.x.p.blocks[b].insts[i];
         for &(_, w) in &inst.writes {
@@ -3728,6 +3753,9 @@ impl<'a> Lower<'a> {
     // ---- instructions ----
 
     fn inst(&mut self, b: usize, i: usize) -> Result<(), Stop> {
+        if self.dead_spills.contains(&(b, i)) {
+            return Ok(());
+        }
         let inst: &'a Inst = &self.x.p.blocks[b].insts[i];
         let offset = inst.machine.offset;
         let name = inst.name();

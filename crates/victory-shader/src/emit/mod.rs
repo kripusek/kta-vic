@@ -315,7 +315,65 @@ fn emit_target(
     host_waves: Option<WaveRange>,
     options: TranslateOptions,
 ) -> Result<HostShader, ShaderError> {
-    let original = emit_program(c, native, p, st, io, res, host_waves, options);
+    let original = emit_with_threading(c, native, p, st, io, res, host_waves, options);
+    if native.stage != HwStage::Cs
+        || !matches!(
+            original,
+            Err(ShaderError::Unsupported {
+                what: "a lane-mask join of an untracked mask"
+                    | "a lane mask holding lanes elsewhere read as data",
+                ..
+            })
+        )
+    {
+        return original;
+    }
+
+    let mut p = p.clone();
+    if !crate::sgpr_spill::forward(&mut p) {
+        return original;
+    }
+    let attempt = (|| {
+        let st = structure::structure(&p)?;
+        let io = io::raise(&p, native)?;
+        let res = resource::track(&p, &native.layout, native.stage)?;
+        let dead_spills = crate::sgpr_spill::dead(&p);
+        emit_program(
+            c,
+            native,
+            &p,
+            &st,
+            &io,
+            &res,
+            host_waves,
+            options,
+            &dead_spills,
+        )
+    })();
+    attempt.or(original)
+}
+
+fn emit_with_threading(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+    host_waves: Option<WaveRange>,
+    options: TranslateOptions,
+) -> Result<HostShader, ShaderError> {
+    let original = emit_program(
+        c,
+        native,
+        p,
+        st,
+        io,
+        res,
+        host_waves,
+        options,
+        &Default::default(),
+    );
     // Retry unsupported programs only. Threading can separate an unknown
     // register value from its apparent use on a mutually exclusive path.
     if !matches!(original, Err(ShaderError::Unsupported { .. })) {
@@ -329,7 +387,17 @@ fn emit_target(
     let st = structure::structure(&p)?;
     let io = io::raise(&p, native)?;
     let res = resource::track(&p, &native.layout, native.stage)?;
-    emit_program(c, native, &p, &st, &io, &res, host_waves, options)
+    emit_program(
+        c,
+        native,
+        &p,
+        &st,
+        &io,
+        &res,
+        host_waves,
+        options,
+        &Default::default(),
+    )
 }
 
 fn emit_program(
@@ -341,6 +409,7 @@ fn emit_program(
     res: &resource::Resources,
     host_waves: Option<WaveRange>,
     options: TranslateOptions,
+    dead_spills: &std::collections::HashSet<resource::Site>,
 ) -> Result<HostShader, ShaderError> {
     let sig = |fourcc| -> Result<Vec<container::SigElement>, ShaderError> {
         match c.part(fourcc) {
@@ -390,19 +459,22 @@ fn emit_program(
         }
         _ => 0,
     };
-    let l = lower::lower(&lower::Parts {
-        native,
-        p,
-        st,
-        io,
-        res,
-        inputs,
-        outputs,
-        prims,
-        mesh_stride,
-        host_waves,
-        options,
-    })?;
+    let l = lower::lower_with_dead_spills(
+        &lower::Parts {
+            native,
+            p,
+            st,
+            io,
+            res,
+            inputs,
+            outputs,
+            prims,
+            mesh_stride,
+            host_waves,
+            options,
+        },
+        dead_spills,
+    )?;
     Ok(HostShader {
         stage: native.stage,
         dxil: l.dxil,
