@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Graphics::Direct3D12::*;
@@ -46,7 +47,7 @@ pub(crate) fn wanted(n: u64) -> bool {
         return folder().is_some() && (n.is_power_of_two() || listed(n));
     };
     let mut next_poll = NEXT_POLL.lock().unwrap_or_else(|e| e.into_inner());
-    poll_marker(marker, &mut next_poll, Instant::now()) || listed(n)
+    poll_marker(marker, &mut next_poll, Instant::now()) || listed(n) || TARGET_REQUEST.armed(n)
 }
 
 fn poll_marker(path: &Path, next_poll: &mut Option<Instant>, now: Instant) -> bool {
@@ -341,6 +342,52 @@ fn target_filter() -> Option<&'static TargetFilter> {
     FILTER.as_ref()
 }
 
+struct TargetRequest {
+    frame: AtomicU64,
+    next_poll: Mutex<Option<Instant>>,
+}
+
+static TARGET_REQUEST: TargetRequest = TargetRequest {
+    frame: AtomicU64::new(0),
+    next_poll: Mutex::new(None),
+};
+
+impl TargetRequest {
+    fn armed(&self, frame: u64) -> bool {
+        frame != 0 && self.frame.load(Relaxed) == frame
+    }
+
+    fn poll(&self, marker: &Path, present: u64, now: Instant) -> Option<u64> {
+        let mut next = self.next_poll.lock().unwrap_or_else(|e| e.into_inner());
+        if self.frame.load(Relaxed) >= present || !poll_marker(marker, &mut next, now) {
+            return None;
+        }
+        // One intervening frame leaves time for this arm to become visible
+        // before the title starts recording the next frame's targets.
+        let selected = present.checked_add(2)?;
+        self.frame.store(selected, Relaxed);
+        Some(selected)
+    }
+}
+
+/// Arm a single future frame when the dedicated on-demand marker appears.
+pub(crate) fn poll_target_request(present: u64) {
+    static MARKER: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        let TargetFilter::Match { .. } = target_filter()? else { return None };
+        (std::env::var("VICTORY_CAPTURE_ON_DEMAND").as_deref() == Ok("1"))
+            .then(|| folder().unwrap().join("capture-target-next"))
+    });
+    if let Some(marker) = MARKER.as_ref()
+        && let Some(frame) = TARGET_REQUEST.poll(marker, present, Instant::now())
+    {
+        tracing::info!(frame, "target and presentation capture armed");
+    }
+}
+
+pub(crate) fn wants_targets(frame: u64) -> bool {
+    listed(frame) || TARGET_REQUEST.armed(frame)
+}
+
 /// Notes a title texture the frame being built renders to or writes.
 pub(crate) fn note_target(resource: crate::object::This) {
     if resource.is_null() {
@@ -350,7 +397,7 @@ pub(crate) fn note_target(resource: crate::object::This) {
         return;
     };
     let frame = crate::queue::presented() + 1;
-    if !listed(frame) {
+    if !wants_targets(frame) {
         return;
     }
     let Some(copy) = crate::resource::host_copy(resource) else {
@@ -655,6 +702,28 @@ pub(crate) fn recent_levels() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn target_marker_arms_one_future_frame() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("capture-target-next");
+        let request = TargetRequest {
+            frame: AtomicU64::new(0),
+            next_poll: Mutex::new(None),
+        };
+        let now = Instant::now();
+        assert!(!request.armed(0));
+        std::fs::write(&marker, []).unwrap();
+        assert_eq!(request.poll(&marker, 40, now), Some(42));
+        assert!(!marker.exists());
+        assert!(!request.armed(40));
+        assert!(!request.armed(41));
+        assert!(request.armed(42));
+        assert!(!request.armed(43));
+        assert_eq!(request.poll(&marker, 43, now + Duration::from_secs(1)), None);
+        assert!(!request.armed(45));
+    }
+
     #[test]
     fn target_filter_keeps_only_matching_single_sample_textures() {
         use super::*;

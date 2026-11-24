@@ -310,8 +310,11 @@ extern "system" fn present(
         }
     }
     #[cfg(all(windows, feature = "diagnostics"))]
-    if crate::capture::listed(frame) {
-        crate::capture::dump_targets(frame);
+    {
+        crate::capture::poll_target_request(frame);
+        if crate::capture::wants_targets(frame) {
+            crate::capture::dump_targets(frame);
+        }
     }
     #[cfg(windows)]
     if planes > 0

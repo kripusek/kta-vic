@@ -126,6 +126,7 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_CAPTURE_ON_DEMAND=1` | saves listed frames plus one presented frame each time you create an empty `capture-next` file in the capture folder |
 | `VICTORY_CAPTURE_FAST=1` | skips the per-frame black-transition probe and keeps requested PNG captures |
 | `VICTORY_DUMP_TARGETS=1` | saves the render targets of explicitly listed capture frames. Use `2560x1440-f28` (width, height, DXGI format) instead of `1` to save only matching targets alongside the unchanged presentation capture |
+| `capture-target-next` | with a filtered target and `VICTORY_CAPTURE_ON_DEMAND=1`, create this empty file in the capture folder. It arms both PNG captures for two frame numbers after the present that consumes it, so matching targets can be retained before that frame is presented |
 | `VICTORY_D3D12_DEBUG=1` | host debug layer |
 | `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
 | `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
