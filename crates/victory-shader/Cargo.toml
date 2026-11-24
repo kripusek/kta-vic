@@ -12,6 +12,8 @@ thiserror.workspace = true
 miniz_oxide.workspace = true
 
 [features]
+# Run the Windows shader unit tests with Agility SDK 620 and require GPU coverage.
+agility = []
 # Host D3D12 pipeline checks (`emit::host`).
 host = ["dep:windows"]
 # Debugging switches (emitted-module dumps and the like).

@@ -14,6 +14,25 @@ use crate::{io, ir, resource, structure};
 
 const S_ENDPGM: u32 = 0xBF81_0000;
 
+// D3D12 reads these exports from the process executable. Cargo runs these
+// tests in their own executable, alongside deps/D3D12/, separate from victory.
+#[cfg(all(feature = "agility", target_env = "msvc"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKVersion: u32 = 620;
+
+#[cfg(all(feature = "agility", target_env = "msvc"))]
+#[unsafe(no_mangle)]
+pub static D3D12SDKPath: &[u8; 9] = b".\\D3D12\\\0";
+
+fn check_gpu_coverage(ran: usize) {
+    if ran == 0 {
+        #[cfg(feature = "agility")]
+        panic!("no compatible SM 6.6 device available");
+        #[cfg(not(feature = "agility"))]
+        eprintln!("no compatible SM 6.6 device; GPU assertions skipped");
+    }
+}
+
 /// SOP1 `s_mov_b32 sdst, src0`.
 const fn s_mov_b32(sdst: u8, src0: u8) -> u32 {
     0xBE80_0000 | (sdst as u32) << 16 | 0x03 << 8 | src0 as u32
@@ -226,7 +245,7 @@ fn dispatch_on_all(
             .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
         results.push((label.to_string(), out[0].clone()));
     }
-    assert!(!results.is_empty(), "no compatible SM 6.6 device available");
+    check_gpu_coverage(results.len());
     results
 }
 
@@ -366,7 +385,7 @@ fn wave64_small_group_runs_on_wave32_host() {
         }
         ran += 1;
     }
-    assert!(ran > 0, "no compatible SM 6.6 device available");
+    check_gpu_coverage(ran);
 }
 
 /// A 64-thread Wave64 compute shader that only uses `v_writelane_b32` /
@@ -517,5 +536,5 @@ fn pixel_shader_sgpr_spill_lowers_and_draws() {
         assert_eq!(texels[0][1], 0.75, "{label}: G channel");
         ran += 1;
     }
-    assert!(ran > 0, "no SM 6.6 device available");
+    check_gpu_coverage(ran);
 }
