@@ -237,6 +237,113 @@ pub(crate) fn pc_format(format: u32) -> u32 {
     }
 }
 
+/// R8G8B8A8_UNORM, which stands in for a packed 16-bit render target the
+/// host cannot make (see [`target_format`]).
+const RGBA8_UNORM: u32 = 28;
+
+/// The console's packed 16-bit colour formats a title renders to:
+/// B5G5R5A1_UNORM (86) and B4G4R4A4_UNORM (115).
+const PACKED_16: [u32; 2] = [86, 115];
+
+/// Whether the host GPU lacks render-target or typed unordered-access
+/// support for `format` (asked once per format). NVIDIA has neither for
+/// B4G4R4A4 and no typed UAV for B5G5R5A1, which Grand Theft Auto VI's
+/// 2560x1440 UI targets need; AMD has both.
+#[cfg(windows)]
+fn host_lacks_target(format: u32) -> bool {
+    use std::sync::OnceLock;
+    use windows::Win32::Graphics::Direct3D12::*;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+    static LACKS: [OnceLock<bool>; 2] = [OnceLock::new(), OnceLock::new()];
+    let Some(i) = PACKED_16.iter().position(|&f| f == format) else {
+        return false;
+    };
+    *LACKS[i].get_or_init(|| {
+        let Some(host) = crate::host::host() else { return false };
+        let mut support = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
+            Format: DXGI_FORMAT(format as i32),
+            ..Default::default()
+        };
+        // SAFETY: the structure the feature names, ours.
+        let asked = unsafe {
+            host.device.CheckFeatureSupport(
+                D3D12_FEATURE_FORMAT_SUPPORT,
+                (&raw mut support).cast(),
+                size_of::<D3D12_FEATURE_DATA_FORMAT_SUPPORT>() as u32,
+            )
+        };
+        let needed = D3D12_FORMAT_SUPPORT1_RENDER_TARGET.0 | D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW.0;
+        let lacks = asked.is_err() || support.Support1.0 & needed != needed;
+        if lacks {
+            tracing::info!(format, "packed 16-bit render targets are R8G8B8A8_UNORM on this GPU");
+        }
+        lacks
+    })
+}
+
+#[cfg(not(windows))]
+fn host_lacks_target(_: u32) -> bool {
+    false
+}
+
+/// The format a render target or unordered-access texture of `format` is
+/// made in on the host, and that render target views and pipelines name:
+/// R8G8B8A8_UNORM for a packed 16-bit format the GPU cannot render to or
+/// write typed (each channel keeps its value, with more precision); else
+/// the format as the host has it. Textures only sampled keep theirs.
+pub(crate) fn target_format(format: u32) -> u32 {
+    let format = pc_format(format);
+    if PACKED_16.contains(&format) && host_lacks_target(format) {
+        RGBA8_UNORM
+    } else {
+        format
+    }
+}
+
+/// Returns the guest format only for a packed target whose host texels are wider.
+#[cfg(windows)]
+fn widened_packed(this: This) -> Option<u32> {
+    let host = host_resource(this)?;
+    let guest = resource(this).desc.format;
+    if !PACKED_16.contains(&guest) {
+        return None;
+    }
+    // SAFETY: a live resource.
+    (unsafe { host.GetDesc() }.Format.0 as u32 == RGBA8_UNORM).then_some(guest)
+}
+
+#[cfg(windows)]
+fn packed_transfer_format(src: Option<u32>, dst: Option<u32>, resolve: Option<u32>) -> Option<u32> {
+    match (src, dst) {
+        (None, None) => Some(resolve.unwrap_or(0)),
+        (Some(a), Some(b)) if a == b && resolve.is_none_or(|f| f == a) => Some(RGBA8_UNORM),
+        _ => None,
+    }
+}
+
+/// The host resolve format, or a success sentinel for copies. A transfer
+/// between different packed representations needs a conversion. Decline it
+/// before the caller records any barriers, uploads or destination writes.
+#[cfg(windows)]
+pub(crate) fn transfer_format(src: This, dst: This, resolve: Option<u32>) -> Option<u32> {
+    let (src, dst) = (widened_packed(src), widened_packed(dst));
+    let format = packed_transfer_format(src, dst, resolve);
+    if format.is_none() {
+        static COPY: std::sync::Once = std::sync::Once::new();
+        static RESOLVE: std::sync::Once = std::sync::Once::new();
+        let warning = if resolve.is_some() { &RESOLVE } else { &COPY };
+        warning.call_once(|| {
+            tracing::warn!(
+                ?src,
+                ?dst,
+                ?resolve,
+                "packed texture conversion unavailable"
+            )
+        });
+    }
+    format
+}
+
 /// The typeless format of a format's family (itself if it has none).
 pub(crate) fn family(format: u32) -> u32 {
     const FAMILIES: [(u32, u32); 22] = [
@@ -822,7 +929,12 @@ fn host_texture(
     if d.flags & DEPTH != 0 {
         d.flags &= !UNORDERED;
     }
-    d.format = pc_format(d.format);
+    const RENDER_TARGET: u32 = 1;
+    d.format = if d.flags & (RENDER_TARGET | UNORDERED) != 0 {
+        target_format(d.format)
+    } else {
+        pc_format(d.format)
+    };
     const DENY_SHADER_RESOURCE: u32 = 8;
     if d.flags & DENY_SHADER_RESOURCE == 0
         && let Some(&(_, typeless)) = DEPTH_FORMATS.iter().find(|&&(f, _)| f == d.format)
@@ -839,7 +951,11 @@ fn host_texture(
     let clear_value = (!clear.is_null()).then(|| {
         // SAFETY: the title passes a whole clear value.
         let mut value = unsafe { clear.cast::<[u32; 5]>().read_unaligned() };
-        value[0] = pc_format(value[0]);
+        value[0] = if d.flags & (RENDER_TARGET | UNORDERED) != 0 {
+            target_format(value[0])
+        } else {
+            pc_format(value[0])
+        };
         value
     });
     let heap = D3D12_HEAP_PROPERTIES {
@@ -1583,6 +1699,86 @@ mod tests {
         assert_eq!((r[0], s[0]), (16, 128));
         let (_, _, _, t) = footprints(&texture(64, 64, 71, 1), 1, 1);
         assert_eq!(t, u64::MAX, "no second subresource");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn packed_targets_keep_their_requested_uses() {
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B4G4R4A4_UNORM, DXGI_FORMAT_B5G5R5A1_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+        };
+        use windows::Win32::Graphics::Dxgi::{
+            CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter1, IDXGIFactory4,
+        };
+
+        let Some(host) = crate::host::host() else {
+            return;
+        };
+        // SAFETY: a live device; the factory returns the adapter with its LUID.
+        let adapter = unsafe {
+            let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).unwrap();
+            let adapter: IDXGIAdapter1 = factory
+                .EnumAdapterByLuid(host.device.GetAdapterLuid())
+                .unwrap();
+            adapter.GetDesc1().unwrap()
+        };
+        let end = adapter
+            .Description
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(adapter.Description.len());
+        eprintln!(
+            "adapter: {}",
+            String::from_utf16_lossy(&adapter.Description[..end])
+        );
+        for (packed, flags) in [
+            (DXGI_FORMAT_B5G5R5A1_UNORM, 5),
+            (DXGI_FORMAT_B4G4R4A4_UNORM, 1),
+        ] {
+            let format = packed.0 as u32;
+            let desc = texture(2560, 1440, format, 1);
+            let sampled = host_texture(&desc, 0, std::ptr::null()).expect("sampled packed texture");
+            // SAFETY: a live resource.
+            assert_eq!(unsafe { sampled.GetDesc() }.Format, packed);
+
+            let desc = ResourceDesc { flags, ..desc };
+            let clear = [format, 0, 0, 0, 0];
+            let target =
+                host_texture(&desc, 0, clear.as_ptr().cast()).expect("packed render target");
+            // SAFETY: a live resource.
+            let actual = unsafe { target.GetDesc() };
+            assert_eq!(actual.Flags.0 as u32, flags);
+            assert!(actual.Format == packed || actual.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+            assert_eq!(actual.Format.0 as u32, target_format(format));
+            eprintln!(
+                "packed target {format} flags {flags}: host format {}",
+                actual.Format.0
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn packed_transfers_require_matching_representations() {
+        for packed in PACKED_16 {
+            let wider = Some(packed);
+            assert_eq!(
+                packed_transfer_format(wider, wider, None),
+                Some(RGBA8_UNORM)
+            );
+            assert_eq!(
+                packed_transfer_format(wider, wider, wider),
+                Some(RGBA8_UNORM)
+            );
+            assert_eq!(packed_transfer_format(wider, None, None), None);
+            assert_eq!(packed_transfer_format(None, wider, None), None);
+            assert_eq!(packed_transfer_format(wider, None, wider), None);
+            assert_eq!(packed_transfer_format(None, wider, wider), None);
+            assert_eq!(packed_transfer_format(wider, wider, Some(0)), None);
+        }
+        assert_eq!(packed_transfer_format(Some(86), Some(115), None), None);
+        assert_eq!(packed_transfer_format(None, None, Some(87)), Some(87));
+        assert!(packed_transfer_format(None, None, None).is_some());
     }
 
     /// A 4x4 texture filled from a title buffer through our list and queue,

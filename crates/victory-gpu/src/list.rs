@@ -446,6 +446,9 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             crate::resource::host_resource(dst),
             crate::resource::host_resource(src),
         ) {
+            if crate::resource::transfer_format(src, dst, None).is_none() {
+                return;
+            }
             ensure_state(list, dst, COPY_DEST);
             ensure_state(list, src, COPY_SOURCE);
             crate::texture::host_written(dst);
@@ -508,6 +511,9 @@ extern "system" fn copy_texture_region(
             ONCE.call_once(|| tracing::warn!("texture to buffer copies not implemented"));
             return;
         };
+        if crate::resource::transfer_format(src.resource, dst.resource, None).is_none() {
+            return;
+        }
         let mut from = src;
         let _upload; // keeps the source alive while this call records it
         #[cfg(feature = "diagnostics")]
@@ -621,6 +627,9 @@ extern "system" fn resolve(
         use windows::core::Interface;
         const RESOLVE_DEST: u32 = 0x1000;
         const RESOLVE_SOURCE: u32 = 0x2000;
+        let Some(format) = crate::resource::transfer_format(src, dst, Some(format)) else {
+            return;
+        };
         ensure_state(list, dst, RESOLVE_DEST);
         ensure_state(list, src, RESOLVE_SOURCE);
         crate::texture::host_written(dst);
