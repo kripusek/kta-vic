@@ -108,6 +108,10 @@ enum Command {
         /// The console model the title sees (device type, memory).
         #[arg(long, value_enum, default_value_t = Console::SeriesX)]
         console: Console,
+        /// Override the title's 30/60 Hz frame pacing (30 or 60 fps).
+        /// Omit to keep the title's requested intervals.
+        #[arg(long)]
+        fps: Option<victory_hle::FrameRate>,
         /// Arguments for the title, after `--` (it reads the whole command
         /// line; a title that relaunches itself passes some).
         #[arg(last = true)]
@@ -167,8 +171,9 @@ fn main() -> Result<()> {
             strict,
             execute,
             console,
+            fps,
             title_args: _,
-        } => run::run(&exe, unimplemented, strict, execute, console),
+        } => run::run(&exe, unimplemented, strict, execute, console, fps),
         Command::Config => show_config(),
     }
 }
@@ -218,4 +223,31 @@ pub(crate) fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
         "no paths given and none configured (see victory.example.toml)"
     );
     Ok(all)
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use victory_hle::FrameRate;
+
+    #[test]
+    fn run_frame_rate_is_optional_and_validated() {
+        for (args, expected) in [
+            (vec!["victory", "run", "game.exe"], None),
+            (
+                vec!["victory", "run", "game.exe", "--fps", "30"],
+                Some(FrameRate::Fps30),
+            ),
+            (
+                vec!["victory", "run", "game.exe", "--fps", "60"],
+                Some(FrameRate::Fps60),
+            ),
+        ] {
+            let Command::Run { fps, .. } = Cli::try_parse_from(args).unwrap().command else {
+                panic!("expected run subcommand");
+            };
+            assert_eq!(fps, expected);
+        }
+        assert!(Cli::try_parse_from(["victory", "run", "game.exe", "--fps", "120"]).is_err());
+    }
 }

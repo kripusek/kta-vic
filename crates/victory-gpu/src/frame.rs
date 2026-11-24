@@ -25,6 +25,52 @@ const ORIGIN: u32 = 0;
 const TOKEN_ON_TIMEOUT: u32 = 2;
 const SIXTIETH: Duration = Duration::from_micros(16_667);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameRate {
+    Fps30,
+    Fps60,
+}
+
+impl std::str::FromStr for FrameRate {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "30" => Ok(Self::Fps30),
+            "60" => Ok(Self::Fps60),
+            _ => Err("expected 30 or 60"),
+        }
+    }
+}
+
+static RATE_OVERRIDE: Mutex<Option<FrameRate>> = Mutex::new(None);
+
+/// Select the cadence for standard 30/60 Hz frame requests before the title
+/// starts. Other frame intervals retain their title-defined timing.
+pub fn set_frame_rate_override(rate: Option<FrameRate>) {
+    *RATE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = rate;
+}
+
+fn effective_interval(requested_us: u32, rate: Option<FrameRate>) -> Duration {
+    // The console interval is in whole microseconds. Recognise both
+    // roundings of 30/60 Hz and their 1000/1001 broadcast-rate variants.
+    match (requested_us, rate) {
+        (0 | 16_666..=16_667 | 16_683..=16_684 | 33_333..=33_334 | 33_366..=33_367, Some(rate)) => {
+            match rate {
+                FrameRate::Fps30 => Duration::from_micros(33_333),
+                FrameRate::Fps60 => SIXTIETH,
+            }
+        }
+        (0, None) => SIXTIETH,
+        (us, _) => Duration::from_micros(u64::from(us)),
+    }
+}
+
+fn frame_interval(requested_us: u32) -> Duration {
+    let rate = *RATE_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+    effective_interval(requested_us, rate)
+}
+
 struct Clock {
     start: Instant,
     interval: Duration,
@@ -49,11 +95,13 @@ pub(crate) extern "system" fn set_interval(
     _period: u32,
     _flags: u32,
 ) -> HRESULT {
-    let interval = match length {
-        0 => SIXTIETH,
-        us => Duration::from_micros(u64::from(us)),
-    };
-    tracing::info!(?interval, "frame interval");
+    let interval = frame_interval(length);
+    tracing::info!(
+        ?interval,
+        requested_us = length,
+        effective_us = interval.as_micros() as u64,
+        "frame interval"
+    );
     // A new interval starts from now, after the last tick handed out.
     let first = LAST
         .iter()
@@ -99,7 +147,7 @@ fn next_tick(kind: u32) -> (u64, Duration) {
     let mut clock = clock();
     let c = clock.get_or_insert_with(|| Clock {
         start: Instant::now(),
-        interval: SIXTIETH,
+        interval: frame_interval(0),
         first: 0,
     });
     let elapsed = c.start.elapsed().as_nanos();
@@ -179,6 +227,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn override_only_changes_standard_frame_rates() {
+        for requested in [
+            0, 16_666, 16_667, 16_683, 16_684, 33_333, 33_334, 33_366, 33_367,
+        ] {
+            let native = if requested == 0 { 16_667 } else { requested };
+            assert_eq!(
+                effective_interval(requested, None),
+                Duration::from_micros(u64::from(native))
+            );
+            assert_eq!(
+                effective_interval(requested, Some(FrameRate::Fps60)),
+                SIXTIETH
+            );
+            assert_eq!(
+                effective_interval(requested, Some(FrameRate::Fps30)),
+                Duration::from_micros(33_333)
+            );
+        }
+        for requested in [8_333, 20_000, 40_000, 41_667, 50_000, 100_000] {
+            let native = Duration::from_micros(u64::from(requested));
+            for rate in [None, Some(FrameRate::Fps30), Some(FrameRate::Fps60)] {
+                assert_eq!(effective_interval(requested, rate), native);
+            }
+        }
+    }
+
+    #[test]
     fn waits_end_on_ticks_and_count_frames() {
         let null = std::ptr::null();
         assert_eq!(set_interval(null, null, 2_000, 1, 0), S_OK);
@@ -222,5 +297,17 @@ mod tests {
         // Even when a flip wait begins on the tick another just ended on.
         let (tick, _) = next_tick(FLIP);
         assert!(tick > flips[3]);
+
+        // Changing the display cadence must not reset a guest frame token.
+        let previous = token;
+        set_frame_rate_override(Some(FrameRate::Fps60));
+        assert_eq!(set_interval(null, null, 33_333, 3, 0), S_OK);
+        assert_eq!(clock().as_ref().unwrap().interval, SIXTIETH);
+        assert_eq!(
+            wait(null, ORIGIN, 1_000, std::ptr::null(), 0, &mut token),
+            S_OK
+        );
+        assert_eq!(token, previous + 1);
+        set_frame_rate_override(None);
     }
 }
