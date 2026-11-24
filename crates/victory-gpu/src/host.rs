@@ -82,18 +82,20 @@ static RETIRED: Mutex<Vec<Retired>> = Mutex::new(Vec::new());
 
 /// Holds `resource` alive until several full frames have completed on the GPU.
 pub(crate) fn retire(resource: ID3D12Resource) {
-    let frame = crate::frame::current();
+    let frame = crate::queue::presented();
     RETIRED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(Retired { frame, resource });
 }
 
+/// Ages are in frames presented to the host (not the title's 60 Hz clock, which
+/// ticks many times per frame while the host runs at 1-2 fps).
 /// Takes retired resources old enough to drop once the current submission
 /// finishes on the GPU.
 fn take_retired() -> Vec<Retired> {
-    const KEEP_FRAMES: u64 = 6;
-    let now = crate::frame::current();
+    const KEEP_FRAMES: u64 = 4;
+    let now = crate::queue::presented();
     let mut guard = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
     let mut ready = Vec::new();
     let mut i = 0;
