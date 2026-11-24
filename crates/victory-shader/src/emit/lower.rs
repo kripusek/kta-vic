@@ -8491,6 +8491,30 @@ impl<'a> Lower<'a> {
 
     fn fill_phis(&mut self) -> Result<(), Stop> {
         let p = self.x.p;
+        if !self.barycentric_inputs.is_empty() {
+            // A live join can reach a lazy barycentric input through another
+            // data phi, even if no instruction called get() on that phi.
+            let mut pending: Vec<_> = self
+                .data_phis
+                .iter()
+                .filter_map(|&(_, b, i)| {
+                    let value = p.blocks[b].phis[i].value;
+                    self.read_phis.contains(&value).then_some((b, i))
+                })
+                .collect();
+            while let Some((b, i)) = pending.pop() {
+                let block = &p.blocks[b];
+                for (&pred, &arg) in block.preds.iter().zip(&block.phis[i].args) {
+                    if self.tail[pred].is_some()
+                        && matches!(self.vals.get(&arg), Some(Val::I32(_) | Val::Bit(_)))
+                        && let Some(&location) = self.phi_at.get(&arg)
+                        && self.read_phis.insert(arg)
+                    {
+                        pending.push(location);
+                    }
+                }
+            }
+        }
         for (v, b, i) in std::mem::take(&mut self.data_phis) {
             let phi = &p.blocks[b].phis[i];
             let bit = phi.reg == Reg::Scc;

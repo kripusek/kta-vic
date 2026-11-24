@@ -743,6 +743,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn nested_pixel_phis_materialize_barycentric_input() {
+        let words = [
+            0xbf06_8000u32, // if s0 == 0, retain incoming v0
+            0xbf85_0001,
+            0x7e00_0281, // otherwise v0 = 1
+            0xbf06_8001, // first join; if s1 == 0, retain that join
+            0xbf85_0001,
+            0x7e00_0282, // otherwise v0 = 2
+            0xf800_180f, // second join; export v0 in every channel
+            0,
+            0xbf81_0000,
+        ];
+        let native = NativeProgram {
+            stage: HwStage::Ps,
+            wave64: false,
+            vgprs: 1,
+            layout: vec![crate::native::RootParam {
+                root: crate::native::RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 2,
+                base_register: 0,
+                user_data: 0,
+                slot: 1,
+            }],
+            used: vec![],
+            io: StageIo::Ps {
+                inputs: vec![],
+                input_addr: 1 << 1,
+                db_shader_control: 0,
+                patches: vec![],
+            },
+            code: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        };
+        let outputs = container::signature(
+            &[SigElement {
+                name: "SV_Target".into(),
+                index: 0,
+                kind: 16,
+                comp: 9,
+                interp: 0,
+                row: Some(0),
+                col: 0,
+                cols: 4,
+                usage: 15,
+                half: false,
+            }],
+            false,
+        );
+        let bytes = crate::dxbc::build(&[(FourCC::OSG1, &outputs)]);
+        let p = ir::build(&native.code, false, native.vgprs).unwrap();
+        let initial = p
+            .inputs
+            .iter()
+            .find(|(r, _)| *r == ir::Reg::V(0))
+            .unwrap()
+            .1;
+        let phis: Vec<_> = p.blocks.iter().flat_map(|block| &block.phis).collect();
+        let first = phis.iter().find(|phi| phi.args.contains(&initial)).unwrap();
+        assert!(phis.iter().any(|phi| phi.args.contains(&first.value)));
+        let shader = emit(
+            &Container::parse(&bytes).unwrap(),
+            &native,
+            &p,
+            &structure::structure(&p).unwrap(),
+            &io::raise(&p, &native).unwrap(),
+            &resource::track(&p, &native.layout, native.stage).unwrap(),
+        )
+        .unwrap();
+        let dxil = Container::parse(&shader.dxil).unwrap();
+        let inputs = dxil.part(FourCC::ISG1).unwrap().data;
+        assert_eq!(crate::dxbc::u32_at(inputs, 0).unwrap(), 1);
+        assert_eq!(crate::dxbc::u32_at(inputs, 20).unwrap(), 23);
+        assert_eq!(inputs[33], 0b010);
+        #[cfg(windows)]
+        if let Ok(mut validator) =
+            validator::Validator::load(validator::Validator::default_path().as_deref())
+        {
+            validator.validate(&mut shader.dxil.clone()).unwrap();
+        }
+    }
+
     /// A pixel shader writing a constant colour.
     fn constant_color() -> Vec<u8> {
         let mut s = Shader::new(true);
