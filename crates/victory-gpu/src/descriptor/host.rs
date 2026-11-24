@@ -290,7 +290,16 @@ impl HostHeap {
         let Some(first) = slots.allocate(n) else {
             let cap = self.dynamic;
             static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| tracing::warn!(n, cap, "no free dynamic descriptor slots: a table is not made"));
+            ONCE.call_once(|| {
+                let (free, longest) = free_space(&slots.taken);
+                tracing::warn!(
+                    n,
+                    cap,
+                    free,
+                    longest,
+                    "no free dynamic descriptor slots: a table is not made"
+                );
+            });
             return None;
         };
         Some(self.count + first)
@@ -486,6 +495,17 @@ impl HostHeap {
         }
         Some(text)
     }
+}
+
+/// Total free slots and the longest contiguous run in the physical heap.
+fn free_space(taken: &[bool]) -> (usize, usize) {
+    let mut free = 0;
+    let mut longest = 0;
+    for gap in taken.split(|&held| held) {
+        free += gap.len();
+        longest = longest.max(gap.len());
+    }
+    (free, longest)
 }
 
 /// Logs `what` the first time it happens.
@@ -1021,6 +1041,14 @@ mod tests {
         assert_eq!(slots.allocate(1), None);
         slots.release(0, 8);
         assert_eq!(slots.allocate(8), Some(0));
+    }
+
+    #[test]
+    fn free_space_counts_separate_runs_at_the_heap_ends() {
+        assert_eq!(free_space(&[true; 8]), (0, 0));
+        assert_eq!(free_space(&[false; 8]), (8, 8));
+        let fragmented = [false, false, true, false, true, false, false, false];
+        assert_eq!(free_space(&fragmented), (6, 3));
     }
 
     /// Dynamic slots stay taken until given back, and runs do not wrap.
