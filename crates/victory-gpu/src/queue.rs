@@ -151,31 +151,103 @@ const _: () = {
     assert!(std::mem::offset_of!(Plane, dest_placement) == 0x20);
 };
 #[cfg(windows)]
-fn full_source_rect(rect: *const u8, width: u64, height: u32) -> bool {
-    if rect.is_null() {
-        return true;
-    }
-    // D3D12_RECT has four 32-bit signed coordinates. Read only the first
-    // rectangle, for the first resource, through the checked title-memory path.
+fn plane_rect_words(rect: *const u8) -> Result<[u32; 4], &'static str> {
     let mut bytes = [0u8; 16];
     if !crate::host::read_into(rect, &mut bytes) {
-        return false;
+        return Err("unreadable rectangle");
     }
-    let coord = |off| i32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
-    coord(0) == 0
-        && coord(4) == 0
-        && u64::try_from(coord(8)).ok() == Some(width)
-        && u32::try_from(coord(12)).ok() == Some(height)
+    Ok(std::array::from_fn(|i| {
+        u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+    }))
+}
+
+#[cfg(windows)]
+fn present_geometry(
+    source_rect: *const u8,
+    dest_placement: *const u8,
+    width: u64,
+    height: u32,
+) -> Result<crate::host::PresentGeometry, &'static str> {
+    let mut geometry = crate::host::PresentGeometry::default();
+    if !source_rect.is_null() {
+        // pSrcViewRects points to D3D12_RECT edges in texture pixels.
+        let bounds = plane_rect_words(source_rect)?;
+        let [left, top, right, bottom] = bounds.map(|v| v as i32);
+        if left < 0
+            || top < 0
+            || left >= right
+            || top >= bottom
+            || right as u64 > width
+            || bottom as u64 > u64::from(height)
+        {
+            return Err("source rectangle outside the texture");
+        }
+        if left != 0 || top != 0 || right as u64 != width || bottom as u32 != height {
+            geometry.source = Some(bounds);
+        }
+    }
+    if !dest_placement.is_null() {
+        // pDestPlacementBase points to D3D12XBOX_VIEW_RECT. The GDK
+        // XGameStreamingSetResolution remarks define the 0..1 display scale.
+        let dest = plane_rect_words(dest_placement)?.map(f32::from_bits);
+        let [left, top, right, bottom] = dest;
+        if !(left >= 0.0
+            && left < right
+            && right <= 1.0
+            && top >= 0.0
+            && top < bottom
+            && bottom <= 1.0)
+        {
+            return Err("unsupported destination rectangle");
+        }
+        geometry.destination = dest;
+    }
+    Ok(geometry)
 }
 
 #[cfg(all(test, windows))]
 #[test]
-fn present_source_rect_checks_full_texture() {
+fn present_rects_decode_pixel_crop_and_normalized_placement() {
+    use crate::host::PresentGeometry;
+    let null = std::ptr::null();
     let full = [0i32, 0, 1920, 1080];
-    let crop = [0i32, 0, 1280, 720];
-    assert!(full_source_rect(std::ptr::null(), 1920, 1080));
-    assert!(full_source_rect(full.as_ptr().cast(), 1920, 1080));
-    assert!(!full_source_rect(crop.as_ptr().cast(), 1920, 1080));
+    let full_destination = [0.0f32, 0.0, 1.0, 1.0];
+    let crop = [64i32, 32, 1280, 720];
+    let placement = [0.25f32, 0.125, 0.75, 1.0];
+    assert_eq!(
+        present_geometry(null, null, 1920, 1080),
+        Ok(PresentGeometry::default())
+    );
+    assert_eq!(
+        present_geometry(full.as_ptr().cast(), null, 1920, 1080),
+        Ok(PresentGeometry::default())
+    );
+    assert_eq!(
+        present_geometry(
+            full.as_ptr().cast(),
+            full_destination.as_ptr().cast(),
+            1920,
+            1080
+        ),
+        Ok(PresentGeometry::default()),
+    );
+    assert_eq!(
+        present_geometry(crop.as_ptr().cast(), placement.as_ptr().cast(), 1920, 1080),
+        Ok(PresentGeometry {
+            source: Some([64, 32, 1280, 720]),
+            destination: placement
+        }),
+    );
+    for invalid in [[-1i32, 0, 16, 16], [0, 0, 1921, 1080], [4, 0, 4, 16]] {
+        assert!(present_geometry(invalid.as_ptr().cast(), null, 1920, 1080).is_err());
+    }
+    for invalid in [
+        [-0.5, 0.0, 0.5, 1.0],
+        [0.0, 0.0, f32::NAN, 1.0],
+        [0.0, 0.0, 0.5, 2.0],
+    ] {
+        assert!(present_geometry(null, invalid.as_ptr().cast(), 1920, 1080).is_err());
+    }
 }
 
 /// Submission tagged with the frame it belongs to `(count, lists, frame
@@ -323,9 +395,12 @@ extern "system" fn present(
     {
         // SAFETY: the title passes `planes` plane descriptions.
         let slice = unsafe { std::slice::from_raw_parts(plane_parameters, planes.min(8) as usize) };
-        let mut textures = Vec::with_capacity(slice.len());
+        let mut textures: Vec<(
+            std::sync::Arc<crate::resource::HostTexture>,
+            crate::host::PresentGeometry,
+        )> = Vec::with_capacity(slice.len());
         let mut primary = std::ptr::null();
-        let mut covers_frame = true;
+        let mut unsupported = None;
         for (index, plane) in slice.iter().enumerate() {
             let resource = if plane.count == 0 || plane.resources.is_null() {
                 std::ptr::null()
@@ -346,26 +421,68 @@ extern "system" fn present(
             if index == 0 {
                 primary = resource;
             }
-            if textures.iter().any(|previous: &std::sync::Arc<crate::resource::HostTexture>| {
-                previous.texture == texture.texture
-            }) {
+            if textures
+                .iter()
+                .any(|(previous, _)| previous.texture == texture.texture)
+            {
                 continue;
             }
-            if slice.len() > 1 && covers_frame {
+            let geometry = if plane.source_rects.is_null() && plane.dest_placement.is_null() {
+                crate::host::PresentGeometry::default()
+            } else if plane.count != 1 {
+                unsupported.get_or_insert((
+                    index,
+                    "multiple resource views in a placed or cropped plane",
+                ));
+                crate::host::PresentGeometry::default()
+            } else {
                 // SAFETY: the retained texture is live.
                 let desc = unsafe { texture.texture.GetDesc() };
-                covers_frame = plane.dest_placement.is_null()
-                    && full_source_rect(plane.source_rects, desc.Width, desc.Height);
-            }
-            textures.push(texture);
+                match present_geometry(
+                    plane.source_rects,
+                    plane.dest_placement,
+                    desc.Width,
+                    desc.Height,
+                ) {
+                    Ok(geometry) => {
+                        #[cfg(feature = "diagnostics")]
+                        {
+                            static LOGGED: AtomicU64 = AtomicU64::new(0);
+                            let bit = 1 << index;
+                            if LOGGED.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+                                tracing::info!(
+                                    plane = index,
+                                    width = desc.Width,
+                                    height = desc.Height,
+                                    source_rect = !plane.source_rects.is_null(),
+                                    destination_rect = !plane.dest_placement.is_null(),
+                                    ?geometry,
+                                    "PresentX decoded plane rectangles"
+                                );
+                            }
+                        }
+                        geometry
+                    }
+                    Err(reason) => {
+                        unsupported.get_or_insert((index, reason));
+                        crate::host::PresentGeometry::default()
+                    }
+                }
+            };
+            textures.push((texture, geometry));
         }
         if !textures.is_empty() {
-            if !covers_frame {
+            if let Some((plane, reason)) = unsupported {
                 static WARNED: AtomicBool = AtomicBool::new(false);
                 if !WARNED.swap(true, Ordering::Relaxed) {
-                    tracing::warn!("PresentX has a cropped or placed plane; using primary only");
+                    tracing::warn!(
+                        plane,
+                        reason,
+                        "unsupported PresentX plane geometry; using primary only"
+                    );
                 }
                 textures.truncate(1);
+                textures[0].1 = crate::host::PresentGeometry::default();
             }
             let shown = host.present(&textures, frame);
             #[cfg(feature = "diagnostics")]

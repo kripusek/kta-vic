@@ -8,6 +8,24 @@ use windows::core::{PCSTR, s};
 use super::transition;
 
 const MAX_PLANES: u32 = 8;
+const FULL_DESTINATION: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PresentGeometry {
+    /// Left, top, right, bottom in source texels. None means the whole plane.
+    pub(crate) source: Option<[u32; 4]>,
+    /// Left, top, right, bottom in display-relative units.
+    pub(crate) destination: [f32; 4],
+}
+
+impl Default for PresentGeometry {
+    fn default() -> Self {
+        Self {
+            source: None,
+            destination: FULL_DESTINATION,
+        }
+    }
+}
 
 /// Built-in fullscreen-triangle compositor for multi-plane `PresentX` calls
 /// (e.g. Series S presenting a 1080p scene plane with a 4K UI overlay plane).
@@ -25,13 +43,17 @@ impl Compositor {
     pub(super) fn new(device: &ID3D12Device, format: DXGI_FORMAT) -> windows::core::Result<Self> {
         const SOURCE: &str = r#"
             #define RS "DescriptorTable(SRV(t0), visibility=SHADER_VISIBILITY_PIXEL), \
-                        RootConstants(num32BitConstants=1, b0, visibility=SHADER_VISIBILITY_PIXEL), \
+                        RootConstants(num32BitConstants=9, b0, visibility=SHADER_VISIBILITY_PIXEL), \
                         StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, \
                             addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, \
                             visibility=SHADER_VISIBILITY_PIXEL)"
             Texture2D tex : register(t0);
             SamplerState smp : register(s0);
-            cbuffer Encoding : register(b0) { uint encode_srgb; };
+            cbuffer Plane : register(b0) {
+                float4 source_edges;
+                float4 sample_centers;
+                uint encode_srgb;
+            };
             [RootSignature(RS)]
             void vs(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD) {
                 uv = float2((id << 1) & 2, id & 2);
@@ -39,7 +61,9 @@ impl Compositor {
             }
             [RootSignature(RS)]
             float4 ps(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
-                float4 color = tex.Sample(smp, uv);
+                uv = lerp(source_edges.xy, source_edges.zw, uv);
+                // Linear filtering cannot sample texels outside the source rectangle.
+                float4 color = tex.Sample(smp, clamp(uv, sample_centers.xy, sample_centers.zw));
                 if (encode_srgb != 0) {
                     // The swap-chain RTV is UNORM. Restore the encoded RGB
                     // components after sampling through a legal typed SRV.
@@ -173,17 +197,77 @@ impl Compositor {
     }
 }
 
-pub(super) type Plane<'a> = (&'a ID3D12Resource, D3D12_RESOURCE_STATES, DXGI_FORMAT);
+pub(super) type PresentSource<'a> = (&'a ID3D12Resource, u32, PresentGeometry);
+
+pub(super) struct Plane<'a> {
+    pub(super) texture: &'a ID3D12Resource,
+    pub(super) size: (u32, u32),
+    state: D3D12_RESOURCE_STATES,
+    format: DXGI_FORMAT,
+    geometry: PresentGeometry,
+}
+
+impl Plane<'_> {
+    fn constants(&self) -> [u32; 9] {
+        let (w, h) = self.size;
+        let [left, top, right, bottom] = self.geometry.source.unwrap_or([0, 0, w, h]);
+        let (w, h) = (w as f32, h as f32);
+        let (l, t, r, b) = (left as f32, top as f32, right as f32, bottom as f32);
+        let srgb = matches!(
+            self.format,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+        );
+        [
+            (l / w).to_bits(),
+            (t / h).to_bits(),
+            (r / w).to_bits(),
+            (b / h).to_bits(),
+            ((l + 0.5) / w).to_bits(),
+            ((t + 0.5) / h).to_bits(),
+            ((r - 0.5) / w).to_bits(),
+            ((b - 0.5) / h).to_bits(),
+            u32::from(srgb),
+        ]
+    }
+
+    fn placement(&self, (width, height): (u32, u32)) -> Option<(D3D12_VIEWPORT, RECT)> {
+        let [l, t, r, b] = self.geometry.destination;
+        let (w, h) = (width as f32, height as f32);
+        let (l, t, r, b) = (l * w, t * h, r * w, b * h);
+        // Scissors include pixels whose centers fall within the placed view.
+        let edge = |v: f32| (v - 0.5).ceil() as i32;
+        let scissor = RECT {
+            left: edge(l),
+            top: edge(t),
+            right: edge(r),
+            bottom: edge(b),
+        };
+        if scissor.left >= scissor.right || scissor.top >= scissor.bottom {
+            return None;
+        }
+        Some((
+            D3D12_VIEWPORT {
+                TopLeftX: l,
+                TopLeftY: t,
+                Width: r - l,
+                Height: b - t,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            },
+            scissor,
+        ))
+    }
+}
 
 pub(super) fn prepare_planes<'a>(
     device: &ID3D12Device,
-    planes: &[(&'a ID3D12Resource, u32)],
+    planes: &[PresentSource<'a>],
 ) -> Option<Vec<Plane<'a>>> {
     let mut prepared: Vec<Plane<'_>> = Vec::with_capacity(planes.len());
     if planes.len() > MAX_PLANES as usize {
         return None;
     }
-    for &(texture, state) in planes {
+    for &(texture, state, geometry) in planes {
         // SAFETY: a live D3D12 resource and a local feature query.
         let desc = unsafe { texture.GetDesc() };
         let format = sampled_format(desc.Format)?;
@@ -195,7 +279,9 @@ pub(super) fn prepare_planes<'a>(
             || desc.DepthOrArraySize != 1
             || desc.SampleDesc.Count != 1
             || (desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE).0 != 0
-            || prepared.iter().any(|&(previous, _, _)| previous == texture)
+            || desc.Width == 0
+            || desc.Height == 0
+            || prepared.iter().any(|previous| previous.texture == texture)
         {
             return None;
         }
@@ -210,7 +296,13 @@ pub(super) fn prepare_planes<'a>(
         if (support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE).0 == 0 {
             return None;
         }
-        prepared.push((texture, D3D12_RESOURCE_STATES(state as i32), format));
+        prepared.push(Plane {
+            texture,
+            size: (u32::try_from(desc.Width).ok()?, desc.Height),
+            state: D3D12_RESOURCE_STATES(state as i32),
+            format,
+            geometry,
+        });
     }
     Some(prepared)
 }
@@ -267,14 +359,14 @@ impl Compositor {
             let srv_gpu_base = self.srv_heap.GetGPUDescriptorHandleForHeapStart();
             let count = planes.len();
             let mut before = Vec::with_capacity(count + 1);
-            for (i, &(tex, state, srv_fmt)) in planes.iter().enumerate() {
+            for (i, plane) in planes.iter().enumerate() {
                 let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                     ptr: srv_cpu_base.ptr + i * self.srv_stride as usize,
                 };
                 device.CreateShaderResourceView(
-                    tex,
+                    plane.texture,
                     Some(&D3D12_SHADER_RESOURCE_VIEW_DESC {
-                        Format: srv_fmt,
+                        Format: plane.format,
                         ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
                         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
                         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -288,10 +380,10 @@ impl Compositor {
                     }),
                     handle,
                 );
-                if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
                     before.push(transition(
-                        tex,
-                        state,
+                        plane.texture,
+                        plane.state,
                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                     ));
                 }
@@ -304,28 +396,24 @@ impl Compositor {
             list.ResourceBarrier(&before);
             list.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]);
             list.SetGraphicsRootSignature(&self.root);
-            list.RSSetViewports(&[D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: width as f32,
-                Height: height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            }]);
-            list.RSSetScissorRects(&[RECT {
-                left: 0,
-                top: 0,
-                right: width as i32,
-                bottom: height as i32,
-            }]);
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
+            if planes[0].geometry.destination != FULL_DESTINATION {
+                list.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0], None);
+            }
             list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            for (i, &(_, _, format)) in planes.iter().enumerate() {
-                let srgb = matches!(
-                    format,
-                    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+            for (i, plane) in planes.iter().enumerate() {
+                let Some((viewport, scissor)) = plane.placement((width, height)) else {
+                    continue;
+                };
+                list.RSSetViewports(&[viewport]);
+                list.RSSetScissorRects(&[scissor]);
+                let constants = plane.constants();
+                list.SetGraphicsRoot32BitConstants(
+                    1,
+                    constants.len() as u32,
+                    constants.as_ptr().cast(),
+                    0,
                 );
-                list.SetGraphicsRoot32BitConstant(1, u32::from(srgb), 0);
                 list.SetPipelineState(if i == 0 { &self.opaque } else { &self.overlay });
                 list.SetGraphicsRootDescriptorTable(
                     0,
@@ -336,12 +424,12 @@ impl Compositor {
                 list.DrawInstanced(3, 1, 0, 0);
             }
             let mut after = Vec::with_capacity(count);
-            for &(tex, state, _) in planes {
-                if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+            for plane in planes {
+                if plane.state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
                     after.push(transition(
-                        tex,
+                        plane.texture,
                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        state,
+                        plane.state,
                     ));
                 }
             }
@@ -489,7 +577,8 @@ mod tests {
         let integer_overlay = texture_in(6, 7, DXGI_FORMAT_R8G8B8A8_UINT);
         // SAFETY: live primary texture.
         let primary = unsafe { base.GetDesc() };
-        let planes = [(&base, 0), (&overlay, 0)];
+        let planes = [(&base, 0), (&overlay, 0)]
+            .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let plan =
             |ready| super::super::plan_presentation(&host.device, primary, &planes, || ready);
         let (extent, composition) = plan(true).unwrap();
@@ -499,7 +588,8 @@ mod tests {
         assert_eq!(extent, (2, 3));
         assert!(composition.is_none());
 
-        let invalid_planes = [(&base, 0), (&integer_overlay, 0)];
+        let invalid_planes = [(&base, 0), (&integer_overlay, 0)]
+            .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let (extent, composition) =
             super::super::plan_presentation(&host.device, primary, &invalid_planes, || {
                 panic!("unsupported overlay should bypass compositor initialization")
@@ -570,7 +660,8 @@ mod tests {
         let planes = [
             (&primary, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32),
             (&overlay, D3D12_RESOURCE_STATE_COPY_DEST.0 as u32),
-        ];
+        ]
+        .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let prepared = prepare_planes(&host.device, &planes).unwrap();
         compositor.record(
             &host.device,
@@ -643,7 +734,8 @@ mod tests {
         let planes = [
             (&base, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32),
             (&overlay, D3D12_RESOURCE_STATE_COPY_DEST.0 as u32),
-        ];
+        ]
+        .map(|(texture, state)| (texture, state, PresentGeometry::default()));
         let prepared = prepare_planes(&host.device, &planes).expect("sampleable planes");
         assert!(prepare_planes(&host.device, &[planes[0], planes[0]]).is_none());
         assert_eq!(
@@ -733,5 +825,127 @@ mod tests {
         }
         assert!(image.iter().all(|pixel| pixel[3] == 255));
         eprintln!("software WARP 4x4 composite: {image:?}");
+    }
+
+    #[test]
+    fn warp_composites_1080p_and_4k_cropped_placed_planes() {
+        let host = super::super::create_device(true).expect("software WARP host");
+        let comp = Compositor::new(&host.device, FORMAT).expect("compositor");
+        let target = |w, h, state| {
+            texture(
+                &host.device,
+                w,
+                h,
+                state,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                FORMAT,
+            )
+        };
+        let rt = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        let base = target(1920, 1080, rt);
+        let overlay = target(3840, 2160, rt);
+        let top = target(2, 2, rt);
+        let back = target(3840, 2160, D3D12_RESOURCE_STATE_COMMON);
+        let run = host.new_list().unwrap();
+        let list = &run.list;
+        let crop = RECT {
+            left: 1024,
+            top: 768,
+            right: 1040,
+            bottom: 784,
+        };
+        // SAFETY: the three source textures and the open list are live.
+        unsafe {
+            list.ClearRenderTargetView(host.rtv(Some(&base), None), &[0.0, 0.5, 0.0, 1.0], None);
+            let overlay_rtv = host.rtv(Some(&overlay), None);
+            list.ClearRenderTargetView(overlay_rtv, &[1.0, 0.0, 1.0, 1.0], None);
+            list.ClearRenderTargetView(overlay_rtv, &[0.0, 0.0, 0.5, 0.5], Some(&[crop]));
+            list.ClearRenderTargetView(host.rtv(Some(&top), None), &[0.5, 0.0, 0.0, 0.5], None);
+        }
+        let input = [
+            (
+                &base,
+                rt.0 as u32,
+                PresentGeometry {
+                    source: None,
+                    destination: [0.0, 0.125, 1.0, 1.0],
+                },
+            ),
+            (
+                &overlay,
+                rt.0 as u32,
+                PresentGeometry {
+                    source: Some([1024, 768, 1040, 784]),
+                    destination: [0.25, 0.25, 0.75, 0.75],
+                },
+            ),
+            (
+                &top,
+                rt.0 as u32,
+                PresentGeometry {
+                    source: None,
+                    destination: [0.5, 0.5, 0.625, 0.625],
+                },
+            ),
+        ];
+        // SAFETY: the primary source is live.
+        let ((width, height), planes) = super::super::plan_presentation(
+            &host.device,
+            unsafe { base.GetDesc() },
+            &input,
+            || true,
+        )
+        .expect("presentation plan");
+        assert_eq!((width, height), (3840, 2160));
+        comp.record(
+            &host.device,
+            list,
+            &back,
+            D3D12_RESOURCE_STATE_COMMON,
+            &planes.unwrap(),
+        );
+        // SAFETY: the compositor leaves the destination in render-target state.
+        unsafe {
+            list.ResourceBarrier(&[transition(&back, rt, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
+        }
+        let (readback, layout) = crate::capture::read_back(&host.device, list, &back).unwrap();
+        run.close();
+        assert_eq!(host.execute_checked(&[&run]), None);
+        let black = [0u8, 0, 0, 255];
+        let green = [0, 128, 0, 255];
+        let blue_over_green = [0, 64, 128, 255];
+        let red_over_blue = [128, 32, 64, 255];
+        let checks = [
+            (0u32, 269u32, black),
+            (0, 270, green),
+            (959, 540, green),
+            (960, 539, green),
+            (960, 540, blue_over_green),
+            (2879, 1619, blue_over_green),
+            (2880, 1619, green),
+            (2879, 1620, green),
+            (1919, 1080, blue_over_green),
+            (1920, 1080, red_over_blue),
+            (2399, 1349, red_over_blue),
+            (2400, 1349, blue_over_green),
+            (2399, 1350, blue_over_green),
+        ];
+        // SAFETY: submission completed and every sample is inside the mapped footprint.
+        unsafe {
+            let mut data = std::ptr::null_mut();
+            readback.Map(0, None, Some(&mut data)).unwrap();
+            for (x, y, expected) in checks {
+                let at = layout.Offset as usize + (y * layout.Footprint.RowPitch + x * 4) as usize;
+                let actual = data.cast::<u8>().add(at).cast::<[u8; 4]>().read();
+                assert!(
+                    actual
+                        .into_iter()
+                        .zip(expected)
+                        .all(|(a, e)| a.abs_diff(e) <= 1),
+                    "pixel ({x}, {y}) was {actual:?}, expected {expected:?}"
+                );
+            }
+            readback.Unmap(0, None);
+        }
     }
 }
