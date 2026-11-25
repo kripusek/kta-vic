@@ -296,94 +296,6 @@
                             </Grid>
                         </RadioButton>
 
-                        <TextBlock Text="⚠️ NIE DZIAŁAJĄCE GRAFICZNIE (CZARNY ŚWIAT PO INTRO / DEBUG)" FontSize="13" FontWeight="Bold" Foreground="#F59E0B" Margin="0,12,0,10"/>
-
-                        <!-- Preset 6 (Non-working world): Series S 1080p -->
-                        <RadioButton x:Name="optSeriesS1080" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🎮" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VI Causeway / kta-vic — Xbox Series S @ 1080p 60 FPS" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Działa intro i menu; po kartach ładowania świat pozostaje ciemny" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#25283E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="MENU OK" FontSize="9" FontWeight="Black" Foreground="#94A3B8"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 7 (Non-working world): Series S Unlocked -->
-                        <RadioButton x:Name="optSeriesSUnlocked" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🔓" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VI Causeway / kta-vic — Xbox Series S @ UNLOCKED FPS" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Brak limitu 60 FPS (świat 3D nadal nieoświetlony)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#25283E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="NO LIGHT" FontSize="9" FontWeight="Black" Foreground="#94A3B8"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 8 (Non-working world): Series X 1080p -->
-                        <RadioButton x:Name="optSeriesX1080" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🌟" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VI Causeway / kta-vic — Xbox Series X @ 1080p 60 FPS" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Profil Series X ze skalowaniem do 1080p (brak oświetlenia świata)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 9 (Non-working world): Series X 4K -->
-                        <RadioButton x:Name="optSeriesX4K" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="💎" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VI Causeway / kta-vic — Xbox Series X @ Natywne 4K (2160p)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Pełna rozdzielczość 4K (duże zużycie VRAM, świat nieoświetlony)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 10 (Debug): Diag -->
-                        <RadioButton x:Name="optDiag" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🛠️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Tryb Diagnostyczny (Target \diag\victory.exe)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Włączona telemetria shaderów, DRED i trace loader do analizy błędów" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#36220B" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="DEBUG" FontSize="9" FontWeight="Black" Foreground="#F59E0B"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -487,11 +399,6 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
-$optSeriesS1080 = $window.FindName("optSeriesS1080")
-$optSeriesSUnlocked = $window.FindName("optSeriesSUnlocked")
-$optSeriesX1080 = $window.FindName("optSeriesX1080")
-$optSeriesX4K = $window.FindName("optSeriesX4K")
-$optDiag = $window.FindName("optDiag")
 $optScarlettPort = $window.FindName("optScarlettPort")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
 $optVictoryFork = $window.FindName("optVictoryFork")
@@ -649,47 +556,18 @@ function Get-LaunchPlan {
         $workDir = $corgiDir
         $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
     } else {
-        $environment.VICTORY_GPU_TIMING = '1'
-        if ($optDiag.IsChecked) {
-            $profile = 'VIctory diagnostyczny'
-            $exe = $diagExe
-            $environment.VICTORY_D3D12_DEBUG = '1'
-            $environment.VICTORY_D3D12_DRED = '1'
-            $environment.VICTORY_LOG = 'victory_loader=trace,victory_gpu=info,info'
-        } elseif ($optSeriesSUnlocked.IsChecked) {
-            $profile = 'VIctory Series S bez limitu FPS'
-            $environment.VICTORY_UNLOCK_FPS = '1'
-        } elseif ($optSeriesX1080.IsChecked -or $optSeriesX4K.IsChecked) {
-            $console = 'series-x'
-            $profile = 'VIctory Series X 1080p'
-            if ($optSeriesX4K.IsChecked) {
-                $profile = 'VIctory Series X 4K'
-                $height = $null
-            }
-        }
-        if ($chkClzero.IsChecked) { $environment.VICTORY_BATCH_CLZERO = '1' }
-        if ($chkSafeSubmit.IsChecked) { $environment.VICTORY_SAFE_SUBMIT = '1' }
-        if (-not $optDiag.IsChecked) {
-            $environment.VICTORY_D3D12_DRED = if ($chkDred.IsChecked) { '1' } else { '0' }
-        }
-
-        $arguments = @('run', $gameExe, '--unimplemented', 'zero', '--console', $console)
-        if ($optSeriesSUnlocked.IsChecked -ne $true) { $arguments += @('--fps', '60') }
-        if ($height) { $arguments += @('--output-height', $height) }
-        if ($chkMaxWorkers.IsChecked) { $arguments += @('--max-pipeline-workers', '2') }
+        throw 'Wybierz jeden z profili graficznych.'
     }
     return @{ Name = $profile; File = $exe; Arguments = $arguments; Directory = $workDir; Environment = $environment }
 }
 
 $refreshEngineOptions = {
-    $isVictory = -not ($optVictoryCorgi.IsChecked -or $optScarlettPort.IsChecked -or $optScarlettPortDebug.IsChecked -or $optBelobugAmd.IsChecked -or $optVictoryFork.IsChecked)
-    $chkClzero.IsEnabled = $isVictory
-    $chkSafeSubmit.IsEnabled = $isVictory
-    $chkMaxWorkers.IsEnabled = $isVictory
-    $chkDred.IsEnabled = $isVictory -and -not $optDiag.IsChecked
+    $chkClzero.IsEnabled = $false
+    $chkSafeSubmit.IsEnabled = $false
+    $chkMaxWorkers.IsEnabled = $false
+    $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optSeriesS1080, $optSeriesSUnlocked, $optSeriesX1080, $optSeriesX4K,
-        $optDiag, $optScarlettPort, $optScarlettPortDebug, $optVictoryFork, $optBelobugAmd, $optVictoryCorgi)) {
+foreach ($preset in @($optScarlettPort, $optScarlettPortDebug, $optVictoryFork, $optBelobugAmd, $optVictoryCorgi)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
