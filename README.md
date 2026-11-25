@@ -134,17 +134,29 @@ Two upstream fixes helped startup on NVIDIA. Nostyxx remapped descriptor tables 
 ## Dodane źródła, forki i integracje (`clean-base-v2`)
 
 ### Zewnętrzne repozytoria i forki
-- **ZigZagBoi1/ScarlettPort**: `https://github.com/ZigZagBoi1/ScarlettPort` (remote `scarlettport`, lokalnie `e:\gta6\ScarlettPort`) — stos `runtime/victory` + D3D12 Agility SDK 1.614.1, tryb `VICTORY_FALLBACK_LIGHT=1` (oświetlenie zastępcze otwartego świata na RTX 3060), `-DebugView` oraz `-AutoInput`.
-- **fxceless/victory-fork**: `https://github.com/fxceless/victory-fork` (remote `victoryfork`) — m.in. poprawka `e9765a7` wyłączająca domyślnie `VICTORY_WAVE_WIDE` (eliminacja device loss na `ptfx_CS_lightAtlas`).
-- **igvcc/luacias**: `https://github.com/igvcc/luacias` (lokalnie `e:\gta6\luacias`) — baza `v0.2.0-preview`, dokumentacja i optymalizacje VRAM/LDS.
+- **ZigZagBoi1/ScarlettPort**: `https://github.com/ZigZagBoi1/ScarlettPort` (remote `scarlettport`, lokalnie `e:\gta6\ScarlettPort`, `v0.3.1` @ `925f90a`) — stos `runtime/victory` + D3D12 Agility SDK 1.614.1, tryb `VICTORY_OWN_UPSCALER=1`, `VICTORY_PRECOMPILED_GRAPHICS=1`, `-AutoInput` i `-FastBoot`.
+- **fxceless/victory-fork**: `https://github.com/fxceless/victory-fork` (remote `victoryfork`, lokalnie `e:\gta6\victory-fork` @ `085ee7c4`) — przełom wydajnościowy **8–10 FPS** w pierwszych pomieszczeniach prologu (`VICTORY_INDIRECT_GATHER=1`, `VICTORY_WINDOW_UPLOAD`, wbudowany zrzut klatek `VICTORY_SHOT`, licznik FPS).
+- **Belobug/VIctory-Belobug-AMD**: `https://github.com/Belobug/VIctory-Belobug-AMD` (remote `belobug`, lokalnie `e:\gta6\victory-belobug` @ `000ffdd4`) — fork dla AMD Radeon: stałe oświetlenie ambient (`VICTORY_AMBIENT=0.6`), poprawki quad reads, refleksje w świetle ambient, poprawki pojazdów w ruchu i dalekich drzew, nakładka FPS/frametime (`VICTORY_FPS`).
+- **igvcc/luacias**: `https://github.com/igvcc/luacias` (lokalnie `e:\gta6\luacias` @ `238d68f`) — baza `v0.2.0-preview`, dokumentacja i optymalizacje VRAM/LDS.
 - **Corgansm/Corgi-victoryGTA6**: `https://github.com/Corgansm/Corgi-victoryGTA6` (remote `corgi`) — repozytorium śledzące.
 - **Corgansm/victory-corgi**: `https://github.com/Corgansm/victory-corgi` (remote `victorycorgi`, lokalnie `e:\gta6\victory-corgi`) — fork oparty na `fxceless/victory-fork` z poprawką `e9765a7` (brak device loss na `ptfx_CS_lightAtlas`), translacją shadow/ray-tracing, prewarmem potoków oraz integracją `device.rs` / `renderdoc.rs`. Podpięty w launcherze jako **🐶 Victory Corgi**.
-- **Marvisak/VIctory**: `https://github.com/Marvisak/VIctory` (remote `upstream`) — zintegrowane PR-y na `clean-base-v2`: `#93` (BCPack lookup), `#432` (uninitialized SGPRs), `#448` (min/max signed zeros), `#520` (`XAsync` payload), `#565` (conservative depth/position), `#637` (packed inline constants), `#654` (`uav-describe`), `#681` (`vertex-buffer-null-unbind`), `#706` (`cmp_lg_ordered`).
-- **ifBars/VICauseway**: `https://github.com/ifBars/VICauseway` (remote `causeway`) — baza poranna `606a81b` + poprawki `8a05317`, `180ebb0`, `f681ba3` oraz PR-y `#360`, `#367`, `#368`, `#369`, `#1070`.
+- **Marvisak/VIctory**: `https://github.com/Marvisak/VIctory` (remote `upstream` @ `13f91cae`) — upstreamowy runtime (status 2026-11-25: prolog osiągalny przy ~1 FPS); zintegrowane PR-y na `clean-base-v2`: `#93` (BCPack lookup), `#432` (uninitialized SGPRs), `#448` (min/max signed zeros), `#520` (`XAsync` payload), `#565` (conservative depth/position), `#637` (packed inline constants), `#654` (`uav-describe`), `#681` (`vertex-buffer-null-unbind`), `#706` (`cmp_lg_ordered`).
+- **ifBars/VICauseway**: `https://github.com/ifBars/VICauseway` (remote `causeway`, repozytorium obecnie niedostępne) — baza poranna `606a81b` + poprawki `8a05317`, `180ebb0`, `f681ba3` oraz PR-y `#360`, `#367`, `#368`, `#369`, `#1070`.
 
-### Launcher i narzędzia lokalne (`e:\gta6\`)
-- `e:\gta6\kripus_launcher.ps1` — główny launcher GUI (profile VIctory/Causeway, Tryb Diagnostyczny, ScarlettPort `FALLBACK_LIGHT=1`, ScarlettPort `DebugView`, integracja ze Steam).
-- `e:\gta6\ODPAL_SCARLETTPORT.bat` — szybkie uruchamianie ScarlettPort.
+### Launcher i narzędzia lokalne (`e:\gta6\` oraz `launcher/`)
+Launcher GUI (`kripus_launcher.ps1`) dzieli profile na dwie sekcje:
+
+1. **✅ Działające graficznie (oświetlony świat / render 3D):**
+   - **ScarlettPort v0.3.1** (`Lit World + KBM + Own Upscaler`) oraz **ScarlettPort — FastBoot + ReBAR**
+   - **fxceless/victory-fork** (`~10 FPS + Indirect Gather`)
+   - **Belobug AMD Fork** (`Ambient Light + FPS Overlay`)
+   - **Victory Corgi** (`Xbox Series X`)
+2. **⚠️ Nie działające graficznie (czarny świat po intro / diagnostyka):**
+   - **VI Causeway / kta-vic** (`Series S 1080p`, `Series S Unlocked`, `Series X 1080p`, `Series X 4K`)
+   - **Tryb Diagnostyczny** (`\diag\victory.exe`)
+
+Dodatkowe skrypty:
+- `e:\gta6\ODPAL_SCARLETTPORT.bat` — szybkie uruchamianie ScarlettPort (z podziałem na tryb działający i eksperymentalne).
 - `e:\gta6\ODPAL_GTA6.bat` — szybkie uruchamianie VIctory/Causeway + Steam.
 - `e:\gta6\dodaj_do_steama.py` / `DODAJ_DO_STEAMA.bat` — dodawanie skrótu GTA VI z okładkami do Steam.
 
