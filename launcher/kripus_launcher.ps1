@@ -239,7 +239,26 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 3 (Working): fxceless/victory-fork -->
+                        <!-- Preset 3 (Working): NVIDIA 8GB (soldsawn/victory-nvidia-8gb) -->
+                        <RadioButton x:Name="optNvidia8gb" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="💎" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="NVIDIA 8GB (soldsawn/victory-nvidia-8gb • 8-10 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Optymalizacja pod RTX 8 GB (Mip Drop=2, 1080p, Wave32, nakładka F10)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#0F2D3D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="RTX 8GB" FontSize="9" FontWeight="Black" Foreground="#00F0FF"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 4 (Working): fxceless/victory-fork -->
                         <RadioButton x:Name="optVictoryFork" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -249,49 +268,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="fxceless/victory-fork (~10 FPS + Indirect Gather)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="fxceless/victory-fork (988aa41 • ~10 FPS + Indirect Gather)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
                                     <TextBlock Text="Oświetlony prolog 8-10 FPS (Series X, VICTORY_INDIRECT_GATHER=1, pełny zestaw flag)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#2B153D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="10 FPS" FontSize="9" FontWeight="Black" Foreground="#D946EF"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 4 (Working): Belobug AMD Fork -->
-                        <RadioButton x:Name="optBelobugAmd" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🔥" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Belobug AMD Fork (Ambient Light + FPS Overlay)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Oświetlony świat, pojazdy i dalekie drzewa (VICTORY_AMBIENT=0.6, VICTORY_HAIR=1)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#3D1D14" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="BELOBUG" FontSize="9" FontWeight="Black" Foreground="#FB923C"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 5 (Working): Victory Corgi -->
-                        <RadioButton x:Name="optVictoryCorgi" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🐶" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Victory Corgi — Xbox Series X" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Po starcie ekran może być chwilowo czarny. Gdy pojawi się PLAYER, naciśnij Enter lub A." FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="CORGI" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -401,9 +382,8 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 # Element References
 $optScarlettPort = $window.FindName("optScarlettPort")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
+$optNvidia8gb = $window.FindName("optNvidia8gb")
 $optVictoryFork = $window.FindName("optVictoryFork")
-$optBelobugAmd = $window.FindName("optBelobugAmd")
-$optVictoryCorgi = $window.FindName("optVictoryCorgi")
 
 $chkClzero = $window.FindName("chkClzero")
 $chkSafeSubmit = $window.FindName("chkSafeSubmit")
@@ -433,15 +413,11 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
-$victoryDir = Join-Path $root 'victory'
-$corgiDir = Join-Path $root 'victory-corgi'
-$belobugDir = Join-Path $root 'victory-belobug'
+$nvidia8gbDir = Join-Path $root 'victory-nvidia-8gb'
 $forkDir = Join-Path $root 'victory-fork'
 $scarlettDir = Join-Path $root 'ScarlettPort'
-$releaseExe = Join-Path $victoryDir 'target\release\victory.exe'
-$diagExe = Join-Path $victoryDir 'target\diag\victory.exe'
-$corgiExe = Join-Path $corgiDir 'target\release\victory.exe'
-$belobugExe = Join-Path $belobugDir 'target\release\victory.exe'
+$nvidia8gbExe = Join-Path $nvidia8gbDir 'target\release\victory.exe'
+$nvidia8gbScript = Join-Path $nvidia8gbDir 'scripts\play-nvidia-8gb.ps1'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
 $scarlettExe = Join-Path $scarlettDir 'runtime\victory\target\release\victory.exe'
 $scarlettScript = Join-Path $scarlettDir 'scripts\play-victory.ps1'
@@ -524,6 +500,13 @@ function Get-LaunchPlan {
             $environment.VICTORY_REBAR = '1'
             $arguments += '-FastBoot'
         }
+    } elseif ($optNvidia8gb.IsChecked) {
+        Require-File $nvidia8gbExe
+        Require-File $nvidia8gbScript
+        $profile = 'NVIDIA 8GB (soldsawn/victory-nvidia-8gb)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $nvidia8gbDir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidia8gbScript, '-Exe', $gameExe)
     } elseif ($optVictoryFork.IsChecked) {
         $profile = 'fxceless/victory-fork (~10 FPS)'
         $exe = $forkExe
@@ -542,19 +525,6 @@ function Get-LaunchPlan {
         $environment.VICTORY_INDIRECT_GATHER = '1'
         $environment.VICTORY_CARD_REHASH_RUNS = '1'
         $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
-    } elseif ($optBelobugAmd.IsChecked) {
-        $profile = 'Belobug AMD Fork'
-        $exe = $belobugExe
-        $workDir = $belobugDir
-        $environment.VICTORY_AMBIENT = '0.6'
-        $environment.VICTORY_HAIR = '1'
-        $environment.VICTORY_PRESENT_TARGET = '1x1:1'
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
-    } elseif ($optVictoryCorgi.IsChecked) {
-        $profile = 'Victory Corgi Series X'
-        $exe = $corgiExe
-        $workDir = $corgiDir
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
     } else {
         throw 'Wybierz jeden z profili graficznych.'
     }
@@ -567,7 +537,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optScarlettPort, $optScarlettPortDebug, $optVictoryFork, $optBelobugAmd, $optVictoryCorgi)) {
+foreach ($preset in @($optScarlettPort, $optScarlettPortDebug, $optNvidia8gb, $optVictoryFork)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -662,13 +632,11 @@ $btnClearCache.Add_Click({
 $btnCheckStatus.Add_Click({
     $checks = [ordered]@{
         'Plik gry' = $gameExe
-        'VIctory Release' = $releaseExe
-        'VIctory Diag' = $diagExe
-        'Victory Corgi' = $corgiExe
-        'Belobug AMD' = $belobugExe
-        'fxceless victory-fork' = $forkExe
         'ScarlettPort' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
+        'NVIDIA 8GB (soldsawn)' = $nvidia8gbExe
+        'Skrypt NVIDIA 8GB' = $nvidia8gbScript
+        'fxceless victory-fork' = $forkExe
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
