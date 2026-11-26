@@ -4,7 +4,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="KRIPUS LAUNCHER — Grand Theft Auto VI (VI Causeway)"
-        Height="780" Width="1040"
+        Height="840" Width="1100"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
         Background="#0A0B12"
@@ -287,8 +287,8 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="OPCJE SILNIKA I GRAFIKI" FontSize="14" FontWeight="Bold" Foreground="#FF007F" Margin="0,0,0,12"/>
@@ -298,13 +298,13 @@
                         <CheckBox x:Name="chkSafeSubmit" Content="Tryb Safe Submit (Tylko diagnostyka; obniża FPS!)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
                         <CheckBox x:Name="chkDred" Content="D3D12 DRED &amp; Breadcrumbs (Narzut debuggera)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
                         <CheckBox x:Name="chkMaxWorkers" Content="Limit workerów shaderów: 2 (Dla słabszych CPU)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
-                        <CheckBox x:Name="chkShowConsole" Content="Wyświetlaj konsolę na żywo podczas gry" IsChecked="True" Foreground="#CBD5E1" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkShowConsole" Content="Osobne okno konsoli (bez podglądu stdout w analizatorze)" IsChecked="False" Foreground="#CBD5E1" Margin="0,0,0,8" Cursor="Hand"/>
                     </StackPanel>
 
                     <!-- Quick Tools & Actions -->
-                    <Border Grid.Row="2" Background="#121422" BorderBrush="#1F2338" BorderThickness="1" CornerRadius="8" Padding="12">
+                    <Border Grid.Row="2" Background="#121422" BorderBrush="#1F2338" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,10">
                         <StackPanel>
-                            <TextBlock Text="SZYBKIE NARZĘDZIA" FontSize="11" FontWeight="Bold" Foreground="#8A92B2" Margin="0,0,0,8"/>
+                            <TextBlock Text="SZYBKIE NARZĘDZIA" FontSize="11" FontWeight="Bold" Foreground="#8A92B2" Margin="0,0,0,6"/>
                             <Grid Margin="0,0,0,6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -323,13 +323,69 @@
                             </Grid>
                             <Button x:Name="btnSteamSync" Content="🎮 Dodaj / Odśwież w Steam" Style="{StaticResource ActionButtonStyle}" Margin="0,0,0,0"/>
                             
-                            <TextBlock x:Name="txtToolStatus" Text="System gotowy. Wybierz profil i kliknij ODPAL." FontSize="11" Foreground="#38EF7D" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="txtToolStatus" Text="System gotowy. Wybierz profil i kliknij ODPAL." FontSize="11" Foreground="#38EF7D" Margin="0,8,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
 
-                    <!-- Hint / Footnote -->
-                    <TextBlock Grid.Row="3" Text="Wskazówka: Po ostatnich poprawkach shaderów (Wave32 + SRV raw buffer), profil Series S 1080p gwarantuje płynne przejście przez cutscenki do otwartego świata."
-                               FontSize="10.5" Foreground="#64748B" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    <!-- Real-Time Live Game Analyzer -->
+                    <Border Grid.Row="3" Background="#0A0C15" BorderBrush="#252A44" BorderThickness="1" CornerRadius="8" Padding="10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <TextBlock Text="📊 ANALIZATOR GRY NA ŻYWO" FontSize="11" FontWeight="Bold" Foreground="#00F0FF" HorizontalAlignment="Left"/>
+                                <TextBlock x:Name="txtLiveStage" Text="⏸ Oczekiwanie na start" FontSize="11" FontWeight="Bold" Foreground="#94A3B8" HorizontalAlignment="Right"/>
+                            </Grid>
+
+                            <Grid Grid.Row="1" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                    <TextBlock Text="FPS / KLATKA" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
+                                    <TextBlock x:Name="txtLiveFps" Text="--" FontSize="12" FontWeight="Bold" Foreground="#38EF7D"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="RAM PROCESU" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
+                                    <TextBlock x:Name="txtLiveRam" Text="--" FontSize="12" FontWeight="Bold" Foreground="#A78BFA"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Grid.Row="2" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                    <TextBlock Text="SHADERY / POTOKI" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
+                                    <TextBlock x:Name="txtLiveShaders" Text="0" FontSize="12" FontWeight="Bold" Foreground="#E2B714"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="WARN / BŁĘDY" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
+                                    <TextBlock x:Name="txtLiveErrors" Text="0 / 0" FontSize="12" FontWeight="Bold" Foreground="#94A3B8"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBox x:Name="txtLiveLog" Grid.Row="3"
+                                     IsReadOnly="True"
+                                     Background="#07080F"
+                                     Foreground="#CBD5E1"
+                                     BorderBrush="#1B1E30"
+                                     BorderThickness="1"
+                                     FontFamily="Consolas"
+                                     FontSize="10"
+                                     VerticalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     TextWrapping="NoWrap"
+                                     Text="Analizator gotowy. Po uruchomieniu gry zobaczysz tu na żywo etap, FPS, RAM, kompilację shaderów i błędy."/>
+                        </Grid>
+                    </Border>
                 </Grid>
             </Border>
         </Grid>
@@ -399,6 +455,12 @@ $btnSteamSync = $window.FindName("btnSteamSync")
 $btnLaunch = $window.FindName("btnLaunch")
 $btnExit = $window.FindName("btnExit")
 $txtToolStatus = $window.FindName("txtToolStatus")
+$txtLiveStage = $window.FindName("txtLiveStage")
+$txtLiveFps = $window.FindName("txtLiveFps")
+$txtLiveRam = $window.FindName("txtLiveRam")
+$txtLiveShaders = $window.FindName("txtLiveShaders")
+$txtLiveErrors = $window.FindName("txtLiveErrors")
+$txtLiveLog = $window.FindName("txtLiveLog")
 
 # Populate GPU Info
 try {
@@ -542,9 +604,139 @@ foreach ($preset in @($optScarlettPort, $optScarlettPortDebug, $optNvidia8gb, $o
 }
 & $refreshEngineOptions
 
+$liveState = @{
+    StdOutPos = 0L
+    StdErrPos = 0L
+    Shaders = 0
+    Warnings = 0
+    Errors = 0
+    Lines = New-Object System.Collections.Generic.List[string]
+}
+
+function Reset-LiveAnalyzer($ProfileName) {
+    $liveState.StdOutPos = 0L
+    $liveState.StdErrPos = 0L
+    $liveState.Shaders = 0
+    $liveState.Warnings = 0
+    $liveState.Errors = 0
+    $liveState.Lines.Clear()
+    $txtLiveStage.Text = "⏳ Inicjalizacja ($ProfileName)..."
+    $txtLiveStage.Foreground = '#00F0FF'
+    $txtLiveFps.Text = '--'
+    $txtLiveRam.Text = '--'
+    $txtLiveShaders.Text = '0'
+    $txtLiveErrors.Text = '0 / 0'
+    $txtLiveErrors.Foreground = '#94A3B8'
+    $txtLiveLog.Text = "Uruchomiono $ProfileName. Oczekiwanie na zdarzenia..."
+}
+
+function Read-NewLogLines($Path, [ref]$Offset) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            if ($fs.Length -le $Offset.Value) { return @() }
+            $null = $fs.Seek($Offset.Value, [System.IO.SeekOrigin]::Begin)
+            $sr = New-Object System.IO.StreamReader($fs)
+            $text = $sr.ReadToEnd()
+            $Offset.Value = $fs.Position
+            if ([string]::IsNullOrEmpty($text)) { return @() }
+            return ($text -split "`r?`n" | Where-Object { $_.Trim().Length -gt 0 })
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return @()
+    }
+}
+
+function Update-LiveAnalyzer {
+    $proc = Get-Process -Name victory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($proc) {
+        $gb = [math]::Round($proc.WorkingSet64 / 1GB, 2)
+        $txtLiveRam.Text = "$gb GB"
+    } elseif (-not $jobs.ContainsKey('game')) {
+        $txtLiveRam.Text = '--'
+    }
+
+    $job = $jobs['game']
+    if (-not $job) { return }
+
+    $newLines = @()
+    if ($job.StdOut) {
+        $pos = $liveState.StdOutPos
+        $newLines += Read-NewLogLines $job.StdOut ([ref]$pos)
+        $liveState.StdOutPos = $pos
+    }
+    if ($job.StdErr) {
+        $posErr = $liveState.StdErrPos
+        $newLines += Read-NewLogLines $job.StdErr ([ref]$posErr)
+        $liveState.StdErrPos = $posErr
+    }
+
+    if ($newLines.Count -eq 0) { return }
+
+    foreach ($line in $newLines) {
+        $clean = $line.Trim()
+        if ($clean.Length -gt 220) { $clean = $clean.Substring(0, 220) + '...' }
+        $liveState.Lines.Add($clean)
+        if ($liveState.Lines.Count -gt 45) { $liveState.Lines.RemoveAt(0) }
+
+        if ($clean -match '(?i)device removed|device lost|dxgi_error|panic|fatal|access violation|out of memory|crash') {
+            $liveState.Errors++
+            $txtLiveStage.Text = '💥 Błąd GPU / Crash!'
+            $txtLiveStage.Foreground = '#F87171'
+        } elseif ($clean -match '(?i)\bwarn\b|dropped|refused|timeout') {
+            $liveState.Warnings++
+        }
+
+        if ($clean -match '(?i)pipeline|shader|precompile|translating|warm') {
+            $liveState.Shaders++
+            if ($liveState.Errors -eq 0) {
+                $txtLiveStage.Text = '🔧 Kompilacja shaderów / potoków'
+                $txtLiveStage.Foreground = '#E2B714'
+            }
+        } elseif ($clean -match '(?i)draws|world|prologue|directstorage|indirect|ambient') {
+            if ($liveState.Errors -eq 0) {
+                $txtLiveStage.Text = '🌍 Świat 3D / Rozgrywka'
+                $txtLiveStage.Foreground = '#38EF7D'
+            }
+        } elseif ($clean -match '(?i)movie|bink|player|setup|menu|swapchain') {
+            if ($liveState.Errors -eq 0 -and $txtLiveStage.Text -notlike '🌍*') {
+                $txtLiveStage.Text = '🎬 Intro / Menu'
+                $txtLiveStage.Foreground = '#60A5FA'
+            }
+        }
+
+        if ($clean -match '(?i)(\d+(?:\.\d+)?)\s*fps') {
+            $fpsVal = $Matches[1]
+            if ($clean -match '(?i)(\d+(?:\.\d+)?)\s*ms') {
+                $txtLiveFps.Text = "$fpsVal FPS ($($Matches[1]) ms)"
+            } else {
+                $txtLiveFps.Text = "$fpsVal FPS"
+            }
+        } elseif ($clean -match '(?i)(\d+(?:\.\d+)?)\s*ms(?:/frame|\s+a\s+frame)') {
+            $msVal = [double]$Matches[1]
+            if ($msVal -gt 0) {
+                $calcFps = [math]::Round(1000.0 / $msVal, 1)
+                $txtLiveFps.Text = "$calcFps FPS ($msVal ms)"
+            }
+        }
+    }
+
+    $txtLiveShaders.Text = "$($liveState.Shaders)"
+    $txtLiveErrors.Text = "$($liveState.Warnings) / $($liveState.Errors)"
+    if ($liveState.Errors -gt 0) { $txtLiveErrors.Foreground = '#F87171' }
+    elseif ($liveState.Warnings -gt 0) { $txtLiveErrors.Foreground = '#F59E0B' }
+
+    $txtLiveLog.Text = ($liveState.Lines -join [Environment]::NewLine)
+    $txtLiveLog.ScrollToEnd()
+}
+
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(500)
 $timer.Add_Tick({
+    Update-LiveAnalyzer
     foreach ($name in @($jobs.Keys)) {
         $job = $jobs[$name]
         if (-not $job.Process.HasExited) { continue }
@@ -656,7 +848,6 @@ $btnCheckStatus.Add_Click({
 $btnSteamSync.Add_Click({
     try {
         Require-File $steamScript
-        Require-File $releaseExe
         Require-File $gameExe
         $python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue
         $arguments = @($steamScript)
@@ -681,6 +872,7 @@ $btnLaunch.Add_Click({
         $job = Start-LauncherProcess $plan.File $plan.Arguments $plan.Directory $plan.Environment -Hidden:(-not $chkShowConsole.IsChecked)
         $job.Name = $plan.Name
         $jobs.game = $job
+        Reset-LiveAnalyzer $plan.Name
         $btnLaunch.IsEnabled = $false
         $btnClearCache.IsEnabled = $false
         Set-Status "Uruchomiono proces $($plan.Name) (PID $($job.Process.Id))."
