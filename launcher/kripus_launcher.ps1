@@ -239,7 +239,26 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 3 (Working): ScarlettPort v0.4.5 Look + FastBoot -->
+                        <!-- Preset 3: CGBJ 16GB RAM / 8GB VRAM -->
+                        <RadioButton x:Name="optCgbj8gb" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="💾" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="CGBJ 16GB RAM / 8GB VRAM (HeapHeapHooray)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Fork CGBJ zoptymalizowany pod 8 GB VRAM (sparse PRT off, OWN_UPSCALER=1)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="8GB VRAM" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 4 (Working): ScarlettPort v0.4.5 Look + FastBoot -->
                         <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -277,7 +296,26 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 5 (Working): Victory Corgi -->
+                        <!-- Preset 6: Pavl3000/cgbj-fork -->
+                        <RadioButton x:Name="optCgbjFork" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Pavl3000/cgbj-fork (2eb9b22)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Mirror/fork CGBJ pareto-residency (Play-VIctory.cmd + OWN_UPSCALER=1)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="CGBJ FORK" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 7: Victory Corgi -->
                         <RadioButton x:Name="optVictoryCorgi" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -292,6 +330,101 @@
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="CORGI" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 8: Luacias -->
+                        <RadioButton x:Name="optLuacias" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🟣" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Luacias (v0.2.0-preview • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Eksperymentalny port (64-bit atomics, spill tables, LDS ops, świat 3D WIP)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#2B153D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="LUACIAS" FontSize="9" FontWeight="Black" Foreground="#C084FC"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 9: VIctory-Belobug-AMD -->
+                        <RadioButton x:Name="optBelobug" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🔴" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="VIctory-Belobug-AMD (000ffdd • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Fork pod AMD RDNA4 (VICTORY_STRETCH=1, ASYNC_SUBMIT=1, HOIST_CLAMPS=7 • nietestowany na NV)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#3F1515" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="AMD FORK" FontSize="9" FontWeight="Black" Foreground="#F87171"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 10: VIctory-NVIDIA -->
+                        <RadioButton x:Name="optVictoryNvidia" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🟢" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="trustno1-coder/VIctory-NVIDIA (ce6b254)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Oficjalny skrypt play-nvidia.ps1 (słabszy FPS na RTX 3060 Ti niż CGBJ)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="NVIDIA" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 11: VIctory-NVIDIA 8GB -->
+                        <RadioButton x:Name="optNvidia8gb" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🟢" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="soldsawn/victory-nvidia-8gb (c09a44e • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Skrypt play-nvidia-8gb.ps1 + wymuszone --console series-s" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="NV 8GB" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 12: Vice-Tay -->
+                        <RadioButton x:Name="optViceTay" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🏎️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="TaynanGT/Vice-Tay (8ada8fd • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Strojony pod RTX 4090 (na RTX 3060 Ti 8 GB działał słabiej niż CGBJ)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#3A2812" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="VICE-TAY" FontSize="9" FontWeight="Black" Foreground="#FBBF24"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -457,9 +590,16 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 # Element References
 $optCgbj = $window.FindName("optCgbj")
 $optCoolFox = $window.FindName("optCoolFox")
+$optCgbj8gb = $window.FindName("optCgbj8gb")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
 $optVictoryFork = $window.FindName("optVictoryFork")
+$optCgbjFork = $window.FindName("optCgbjFork")
 $optVictoryCorgi = $window.FindName("optVictoryCorgi")
+$optLuacias = $window.FindName("optLuacias")
+$optBelobug = $window.FindName("optBelobug")
+$optVictoryNvidia = $window.FindName("optVictoryNvidia")
+$optNvidia8gb = $window.FindName("optNvidia8gb")
+$optViceTay = $window.FindName("optViceTay")
 
 $chkClzero = $window.FindName("chkClzero")
 $chkSafeSubmit = $window.FindName("chkSafeSubmit")
@@ -497,16 +637,34 @@ $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $cgbjDir = Join-Path $root 'victory-cgbj'
 $coolFoxDir = Join-Path $root 'victory-coolfox'
+$cgbj8gbDir = Join-Path $root 'victory-cgbj-8gb'
 $forkDir = Join-Path $root 'victory-fork'
+$cgbjForkDir = Join-Path $root 'victory-cgbj-fork'
 $corgiDir = Join-Path $root 'victory-corgi'
+$luaciasDir = Join-Path $root 'luacias'
+$belobugDir = Join-Path $root 'victory-belobug'
+$nvidiaDir = Join-Path $root 'victory-nvidia'
+$nvidia8gbDir = Join-Path $root 'victory-nvidia-8gb'
+$viceTayDir = Join-Path $root 'victory-vice-tay'
 $scarlettDir = Join-Path $root 'ScarlettPort'
 $cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
 $cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
 $coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
 $coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
+$cgbj8gbExe = Join-Path $cgbj8gbDir 'target\release\victory.exe'
+$cgbj8gbCmd = Join-Path $cgbj8gbDir 'Play-VIctory.cmd'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
+$cgbjForkExe = Join-Path $cgbjForkDir 'target\release\victory.exe'
+$cgbjForkCmd = Join-Path $cgbjForkDir 'Play-VIctory.cmd'
 $corgiExe = Join-Path $corgiDir 'target\release\victory.exe'
 $corgiScript = Join-Path $corgiDir 'scripts\play-nvidia.ps1'
+$luaciasExe = Join-Path $luaciasDir 'target\release\victory.exe'
+$belobugExe = Join-Path $belobugDir 'target\release\victory.exe'
+$nvidiaExe = Join-Path $nvidiaDir 'target\release\victory.exe'
+$nvidiaScript = Join-Path $nvidiaDir 'scripts\play-nvidia.ps1'
+$nvidia8gbExe = Join-Path $nvidia8gbDir 'target\release\victory.exe'
+$nvidia8gbScript = Join-Path $nvidia8gbDir 'scripts\play-nvidia-8gb.ps1'
+$viceTayExe = Join-Path $viceTayDir 'target\release\victory.exe'
 $scarlettExe = Join-Path $scarlettDir 'engine\target\release\scarlett.exe'
 $scarlettScript = Join-Path $scarlettDir 'scripts\play-victory.ps1'
 $dataDir = Join-Path $root 'victory-data'
@@ -592,6 +750,16 @@ function Get-LaunchPlan {
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-coolfox'
         $environment.VICTORY_OWN_UPSCALER = '1'
         $arguments = @('/c', $coolFoxCmd)
+    } elseif ($optCgbj8gb.IsChecked) {
+        Require-File $cgbj8gbExe
+        Require-File $cgbj8gbCmd
+        $profile = 'CGBJ 16GB RAM / 8GB VRAM (HeapHeapHooray)'
+        $exe = $env:ComSpec
+        $workDir = $cgbj8gbDir
+        $environment.VICTORY_GAME_DIR = $gameDir
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj-8gb'
+        $environment.VICTORY_OWN_UPSCALER = '1'
+        $arguments = @('/c', $cgbj8gbCmd, 'pareto-residency')
     } elseif ($optScarlettPortDebug.IsChecked) {
         Require-File $scarlettExe
         Require-File $scarlettScript
@@ -622,6 +790,16 @@ function Get-LaunchPlan {
         $environment.VICTORY_INDIRECT_GATHER = '1'
         $environment.VICTORY_CARD_REHASH_RUNS = '1'
         $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
+    } elseif ($optCgbjFork.IsChecked) {
+        Require-File $cgbjForkExe
+        Require-File $cgbjForkCmd
+        $profile = 'Pavl3000/cgbj-fork (2eb9b22)'
+        $exe = $env:ComSpec
+        $workDir = $cgbjForkDir
+        $environment.VICTORY_GAME_DIR = $gameDir
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj-fork'
+        $environment.VICTORY_OWN_UPSCALER = '1'
+        $arguments = @('/c', $cgbjForkCmd, 'pareto-residency')
     } elseif ($optVictoryCorgi.IsChecked) {
         Require-File $corgiExe
         Require-File $corgiScript
@@ -630,6 +808,62 @@ function Get-LaunchPlan {
         $workDir = $corgiDir
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $corgiScript,
             '-Exe', $gameExe, '-Build', 'release', '-NoSmoothMotion')
+    } elseif ($optLuacias.IsChecked) {
+        Require-File $luaciasExe
+        $profile = 'Luacias (v0.2.0-preview • Series S)'
+        $exe = $luaciasExe
+        $workDir = $luaciasDir
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
+    } elseif ($optBelobug.IsChecked) {
+        Require-File $belobugExe
+        $profile = 'VIctory-Belobug-AMD (000ffdd • Series S)'
+        $exe = $belobugExe
+        $workDir = $belobugDir
+        $environment.VICTORY_AMBIENT = '0.6'
+        $environment.VICTORY_AMBIENT_REFLECT = '0.5'
+        $environment.VICTORY_HOIST_CLAMPS = '7'
+        $environment.VICTORY_ASYNC_SUBMIT = '1'
+        $environment.VICTORY_STRETCH = '1'
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
+    } elseif ($optVictoryNvidia.IsChecked) {
+        Require-File $nvidiaExe
+        Require-File $nvidiaScript
+        $profile = 'trustno1-coder/VIctory-NVIDIA (ce6b254)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $nvidiaDir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaScript,
+            '-Exe', $gameExe, '-Build', 'release', '-NoSmoothMotion')
+    } elseif ($optNvidia8gb.IsChecked) {
+        Require-File $nvidia8gbExe
+        $profile = 'soldsawn/victory-nvidia-8gb (Series S)'
+        $exe = $nvidia8gbExe
+        $workDir = $nvidia8gbDir
+        $environment.VICTORY_RESOLUTION = '1920x1080'
+        $environment.VICTORY_TEXTURE_DROP_MIPS = '2'
+        $environment.VICTORY_COPY_PLAIN = '1'
+        $environment.VICTORY_INDIRECT_GATHER = '1'
+        $environment.VICTORY_HEAP_WORKER = '1'
+        $environment.VICTORY_ALIAS_ONCE = '1'
+        $environment.VICTORY_JOIN_PARTS = '1'
+        $environment.VICTORY_BACK_OWN_VIEW = '1'
+        $environment.VICTORY_INDIRECT_WINDOW_DRAWS = '1'
+        $environment.VICTORY_GUARD_HOLES_FRAME = '1'
+        $environment.VICTORY_COPY_CHANGED = '1'
+        $environment.VICTORY_CARD_WINDOWS_MB = '2048'
+        $environment.VICTORY_CARD_BUFFERS_MB = '1024'
+        $environment.VICTORY_CLAMP_WAITS = '0'
+        $environment.VICTORY_WIDE_MERGE = '1'
+        $environment.VICTORY_RELAY_OWN_QUEUE = '1'
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
+    } elseif ($optViceTay.IsChecked) {
+        Require-File $viceTayExe
+        $profile = 'TaynanGT/Vice-Tay (8ada8fd • Series S)'
+        $exe = $viceTayExe
+        $workDir = $viceTayDir
+        $environment.VICTORY_DYNAMIC_SLOTS = '524288'
+        $environment.VICTORY_OWN_UPSCALER = '1'
+        $environment.VICTORY_RENDER_SCALE = '0.5'
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
     } else {
         throw 'Wybierz jeden z profili graficznych.'
     }
@@ -642,7 +876,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optCgbj, $optCoolFox, $optScarlettPortDebug, $optVictoryFork, $optVictoryCorgi)) {
+foreach ($preset in @($optCgbj, $optCoolFox, $optCgbj8gb, $optScarlettPortDebug, $optVictoryFork, $optCgbjFork, $optVictoryCorgi, $optLuacias, $optBelobug, $optVictoryNvidia, $optNvidia8gb, $optViceTay)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -870,11 +1104,18 @@ $btnCheckStatus.Add_Click({
         'CGBJ / cool_fox' = $cgbjExe
         'Skrypt CGBJ' = $cgbjCmd
         'cool_fox (DoubleGhosty)' = $coolFoxExe
+        'CGBJ 8GB VRAM' = $cgbj8gbExe
         'ScarlettPort 0.4.5' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
         'fxceless victory-fork' = $forkExe
+        'Pavl3000 cgbj-fork' = $cgbjForkExe
         'Victory Corgi' = $corgiExe
         'Skrypt Victory Corgi' = $corgiScript
+        'Luacias' = $luaciasExe
+        'VIctory-Belobug-AMD' = $belobugExe
+        'VIctory-NVIDIA' = $nvidiaExe
+        'victory-nvidia-8gb' = $nvidia8gbExe
+        'Vice-Tay' = $viceTayExe
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
