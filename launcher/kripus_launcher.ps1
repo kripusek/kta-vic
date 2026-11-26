@@ -201,64 +201,26 @@
                     <StackPanel Orientation="Vertical">
                         <TextBlock Text="✅ DZIAŁAJĄCE GRAFICZNIE (OŚWIETLONY ŚWIAT / 3D)" FontSize="13" FontWeight="Bold" Foreground="#38EF7D" Margin="0,0,0,10"/>
 
-                        <!-- Preset 0 (Working): VIctory-NVIDIA (trustno1-coder) -->
-                        <RadioButton x:Name="optVictoryNvidia" Style="{StaticResource PresetCardStyle}" IsChecked="True">
+                        <!-- Preset 0 (Working): CGBJ pareto-residency + OWN_UPSCALER -->
+                        <RadioButton x:Name="optCgbj" Style="{StaticResource PresetCardStyle}" IsChecked="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="🚀" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-NVIDIA (trustno1-coder • ~20 FPS + pełne drawy)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Naprawa limitu deskryptorów NVIDIA, Series S 0.5x + Own Upscaler, NAN_SCRUB, BVH_MISS" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency + OWN_UPSCALER=1)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Sprawdzony na RTX 3060 Ti: najwyższy FPS + własny upscaler gry (bez crasha FSR4)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="20 FPS" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
+                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 1 (Working): VIctory-NVIDIA Quality -->
-                        <RadioButton x:Name="optVictoryNvidiaQuality" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🎨" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-NVIDIA Quality (~13 FPS • lepsze postacie/skóra)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Tryb -Quality: mniej rozciągniętych ciał i tęczowej skóry na RTX" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#0F2D3D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="QUALITY" FontSize="9" FontWeight="Black" Foreground="#00F0FF"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 2 (Working): Vice-Tay (TaynanGT) -->
-                        <RadioButton x:Name="optViceTay" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🏎️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Vice-Tay (TaynanGT • Series S + Water/Wave64 Fix)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="70-min sesje bez crasha, VICTORY_WAVE_WIDE_ONLY (woda + 4 shadery), PLACED_ORDER=1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#2B1E0F" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="VICE-TAY" FontSize="9" FontWeight="Black" Foreground="#FBBF24"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 3 (Working): DoubleGhosty/cool_fox -->
+                        <!-- Preset 1 (Working): DoubleGhosty/cool_fox -->
                         <RadioButton x:Name="optCoolFox" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -474,9 +436,7 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
-$optVictoryNvidia = $window.FindName("optVictoryNvidia")
-$optVictoryNvidiaQuality = $window.FindName("optVictoryNvidiaQuality")
-$optViceTay = $window.FindName("optViceTay")
+$optCgbj = $window.FindName("optCgbj")
 $optCoolFox = $window.FindName("optCoolFox")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
 $optVictoryFork = $window.FindName("optVictoryFork")
@@ -515,15 +475,12 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
-$victoryNvidiaDir = Join-Path $root 'victory-nvidia'
-$viceTayDir = Join-Path $root 'victory-vice-tay'
+$cgbjDir = Join-Path $root 'victory-cgbj'
 $coolFoxDir = Join-Path $root 'victory-coolfox'
 $forkDir = Join-Path $root 'victory-fork'
 $scarlettDir = Join-Path $root 'ScarlettPort'
-$victoryNvidiaExe = Join-Path $victoryNvidiaDir 'target\release\victory.exe'
-$victoryNvidiaScript = Join-Path $victoryNvidiaDir 'scripts\play-nvidia.ps1'
-$viceTayExe = Join-Path $viceTayDir 'target\release\victory.exe'
-$viceTayScript = Join-Path $viceTayDir 'scripts\play.ps1'
+$cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
+$cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
 $coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
 $coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
@@ -592,26 +549,16 @@ function Get-LaunchPlan {
         VICTORY_GPU_TIMING = $null
     }
 
-    if ($optVictoryNvidia.IsChecked -or $optVictoryNvidiaQuality.IsChecked) {
-        Require-File $victoryNvidiaExe
-        Require-File $victoryNvidiaScript
-        $profile = 'VIctory-NVIDIA (~20 FPS)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $workDir = $victoryNvidiaDir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $victoryNvidiaScript,
-            '-Exe', $gameExe, '-Build', 'release')
-        if ($optVictoryNvidiaQuality.IsChecked) {
-            $profile = 'VIctory-NVIDIA Quality (~13 FPS)'
-            $arguments += '-Quality'
-        }
-    } elseif ($optViceTay.IsChecked) {
-        Require-File $viceTayExe
-        Require-File $viceTayScript
-        $profile = 'Vice-Tay (Series S)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $workDir = $viceTayDir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $viceTayScript,
-            '-Exe', $gameExe, '-Console', 'series-s', '-Windowed', '-Build', 'release')
+    if ($optCgbj.IsChecked) {
+        Require-File $cgbjExe
+        Require-File $cgbjCmd
+        $profile = 'CGBJ / cool_fox (pareto-residency)'
+        $exe = $env:ComSpec
+        $workDir = $cgbjDir
+        $environment.VICTORY_GAME_DIR = $gameDir
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
+        $environment.VICTORY_OWN_UPSCALER = '1'
+        $arguments = @('/c', $cgbjCmd, 'pareto-residency')
     } elseif ($optCoolFox.IsChecked) {
         Require-File $coolFoxExe
         Require-File $coolFoxCmd
@@ -664,7 +611,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optVictoryNvidia, $optVictoryNvidiaQuality, $optViceTay, $optCoolFox, $optScarlettPortDebug, $optVictoryFork)) {
+foreach ($preset in @($optCgbj, $optCoolFox, $optScarlettPortDebug, $optVictoryFork)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -889,10 +836,8 @@ $btnClearCache.Add_Click({
 $btnCheckStatus.Add_Click({
     $checks = [ordered]@{
         'Plik gry' = $gameExe
-        'VIctory-NVIDIA' = $victoryNvidiaExe
-        'Skrypt VIctory-NVIDIA' = $victoryNvidiaScript
-        'Vice-Tay' = $viceTayExe
-        'Skrypt Vice-Tay' = $viceTayScript
+        'CGBJ / cool_fox' = $cgbjExe
+        'Skrypt CGBJ' = $cgbjCmd
         'cool_fox (DoubleGhosty)' = $coolFoxExe
         'ScarlettPort 0.4.5' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
