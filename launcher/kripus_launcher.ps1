@@ -202,7 +202,7 @@
                         <TextBlock Text="✅ DZIAŁAJĄCE GRAFICZNIE (OŚWIETLONY ŚWIAT / 3D)" FontSize="13" FontWeight="Bold" Foreground="#38EF7D" Margin="0,0,0,10"/>
 
                         <!-- Preset 1 (Working): ScarlettPort Lit World -->
-                        <RadioButton x:Name="optScarlettPort" Style="{StaticResource PresetCardStyle}" IsChecked="True">
+                        <RadioButton x:Name="optScarlettPort" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -220,8 +220,8 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 2 (Working): ScarlettPort FastBoot -->
-                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}">
+                        <!-- Preset 2 (Working): ScarlettPort FastBoot + Experimental -->
+                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}" IsChecked="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -230,11 +230,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🚀" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="ScarlettPort — FastBoot + ReBAR (Szybki start do świata)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Pomija logo/menu (-FastBoot -AutoInput) + VICTORY_REBAR=1 + KBM + Own Upscaler" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="ScarlettPort — FastBoot + ReBAR + Experimental" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Najbliżej grywalności: -FastBoot -AutoInput + REBAR=1 + INDIRECT_WINDOW + KEEP" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="FASTBOOT" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
+                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -249,8 +249,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="💎" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="NVIDIA 8GB (soldsawn/victory-nvidia-8gb • 8-10 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Optymalizacja pod RTX 8 GB (Mip Drop=2, 1080p, Wave32, nakładka F10)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="NVIDIA 8GB (Series S + Mip Drop=2 + 1080p)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Wymuszone --console series-s (naprawa skalowania 1/4 ekranu), Wave32, F10 overlay" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#0F2D3D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="RTX 8GB" FontSize="9" FontWeight="Black" Foreground="#00F0FF"/>
@@ -558,17 +558,35 @@ function Get-LaunchPlan {
         $environment.VICTORY_REBAR = $null
         $environment.VICTORY_FAST_BOOT = $null
         if ($optScarlettPortDebug.IsChecked) {
-            $profile = 'ScarlettPort FastBoot'
+            $profile = 'ScarlettPort FastBoot + Experimental'
             $environment.VICTORY_REBAR = '1'
+            $environment.VICTORY_INDIRECT_WINDOW = '1'
+            $environment.VICTORY_INDIRECT_KEEP = '1'
+            $environment.VICTORY_TABLED_SKIP_FRAMES = '2'
             $arguments += '-FastBoot'
         }
     } elseif ($optNvidia8gb.IsChecked) {
         Require-File $nvidia8gbExe
-        Require-File $nvidia8gbScript
-        $profile = 'NVIDIA 8GB (soldsawn/victory-nvidia-8gb)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
+        $profile = 'NVIDIA 8GB (Series S + Mip Drop=2)'
+        $exe = $nvidia8gbExe
         $workDir = $nvidia8gbDir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidia8gbScript, '-Exe', $gameExe)
+        $environment.VICTORY_RESOLUTION = '1920x1080'
+        $environment.VICTORY_TEXTURE_DROP_MIPS = '2'
+        $environment.VICTORY_COPY_PLAIN = '1'
+        $environment.VICTORY_INDIRECT_GATHER = '1'
+        $environment.VICTORY_HEAP_WORKER = '1'
+        $environment.VICTORY_ALIAS_ONCE = '1'
+        $environment.VICTORY_JOIN_PARTS = '1'
+        $environment.VICTORY_BACK_OWN_VIEW = '1'
+        $environment.VICTORY_INDIRECT_WINDOW_DRAWS = '1'
+        $environment.VICTORY_GUARD_HOLES_FRAME = '1'
+        $environment.VICTORY_COPY_CHANGED = '1'
+        $environment.VICTORY_CARD_WINDOWS_MB = '2048'
+        $environment.VICTORY_CARD_BUFFERS_MB = '1024'
+        $environment.VICTORY_CLAMP_WAITS = '0'
+        $environment.VICTORY_WIDE_MERGE = '1'
+        $environment.VICTORY_RELAY_OWN_QUEUE = '1'
+        $arguments = @('run', '--execute', '--console', 'series-s', $gameExe)
     } elseif ($optVictoryFork.IsChecked) {
         $profile = 'fxceless/victory-fork (~10 FPS)'
         $exe = $forkExe
@@ -586,7 +604,7 @@ function Get-LaunchPlan {
         $environment.VICTORY_BACK_OWN_VIEW = '1'
         $environment.VICTORY_INDIRECT_GATHER = '1'
         $environment.VICTORY_CARD_REHASH_RUNS = '1'
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
     } else {
         throw 'Wybierz jeden z profili graficznych.'
     }
