@@ -12,5 +12,6 @@ Launcher zawiera wyłącznie działające profile oraz wbudowany **📊 Analizat
 | **🦊 DoubleGhosty/cool_fox** | `DoubleGhosty/cool_fox` | Kontynuacja CGBJ (`Pareto residency`, LOD fix, sync wideo NVIDIA) + `VICTORY_OWN_UPSCALER=1` |
 | **🌴 ScarlettPort v0.4.5 (Look + FastBoot + ReBAR)** | `ZigZagBoi1/ScarlettPort` (`f300de1`) | Nowy silnik `engine/scarlett.exe`, preset `-Look`, `-FastBoot -AutoInput`, `REBAR=1` |
 | **⚡ fxceless/victory-fork (`e4245f3`)** | `fxceless/victory-fork` (`e4245f3`) | Naprawa czarnych twarzy, ruszające się usta (PR #927), `-10 ms/klatkę`, wymuszony `series-s` |
+| **🐶 Victory Corgi (`8b6671cc`)** | `Corgansm/victory-corgi` (`8b6671cc`) | Zaktualizowany build `Corgansm/victory-corgi` (`--console series-s`) |
 
 Szczegółowa dokumentacja znajduje się w [victory/README.md](victory/README.md).
