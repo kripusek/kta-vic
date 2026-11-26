@@ -239,7 +239,26 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 2 (Working): DoubleGhosty/cool_fox -->
+                        <!-- Preset 2 (Working): Vice-Tay (TaynanGT) -->
+                        <RadioButton x:Name="optViceTay" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🏎️" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Vice-Tay (TaynanGT • Series S + Water/Wave64 Fix)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="70-min sesje bez crasha, VICTORY_WAVE_WIDE_ONLY (woda + 4 shadery), PLACED_ORDER=1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#2B1E0F" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="VICE-TAY" FontSize="9" FontWeight="Black" Foreground="#FBBF24"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 3 (Working): DoubleGhosty/cool_fox -->
                         <RadioButton x:Name="optCoolFox" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -457,6 +476,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 # Element References
 $optVictoryNvidia = $window.FindName("optVictoryNvidia")
 $optVictoryNvidiaQuality = $window.FindName("optVictoryNvidiaQuality")
+$optViceTay = $window.FindName("optViceTay")
 $optCoolFox = $window.FindName("optCoolFox")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
 $optVictoryFork = $window.FindName("optVictoryFork")
@@ -496,11 +516,14 @@ $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $victoryNvidiaDir = Join-Path $root 'victory-nvidia'
+$viceTayDir = Join-Path $root 'victory-vice-tay'
 $coolFoxDir = Join-Path $root 'victory-coolfox'
 $forkDir = Join-Path $root 'victory-fork'
 $scarlettDir = Join-Path $root 'ScarlettPort'
 $victoryNvidiaExe = Join-Path $victoryNvidiaDir 'target\release\victory.exe'
 $victoryNvidiaScript = Join-Path $victoryNvidiaDir 'scripts\play-nvidia.ps1'
+$viceTayExe = Join-Path $viceTayDir 'target\release\victory.exe'
+$viceTayScript = Join-Path $viceTayDir 'scripts\play.ps1'
 $coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
 $coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
@@ -581,6 +604,14 @@ function Get-LaunchPlan {
             $profile = 'VIctory-NVIDIA Quality (~13 FPS)'
             $arguments += '-Quality'
         }
+    } elseif ($optViceTay.IsChecked) {
+        Require-File $viceTayExe
+        Require-File $viceTayScript
+        $profile = 'Vice-Tay (Series S)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $viceTayDir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $viceTayScript,
+            '-Exe', $gameExe, '-Console', 'series-s', '-Windowed', '-Build', 'release')
     } elseif ($optCoolFox.IsChecked) {
         Require-File $coolFoxExe
         Require-File $coolFoxCmd
@@ -633,7 +664,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optVictoryNvidia, $optVictoryNvidiaQuality, $optCoolFox, $optScarlettPortDebug, $optVictoryFork)) {
+foreach ($preset in @($optVictoryNvidia, $optVictoryNvidiaQuality, $optViceTay, $optCoolFox, $optScarlettPortDebug, $optVictoryFork)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -860,6 +891,8 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'VIctory-NVIDIA' = $victoryNvidiaExe
         'Skrypt VIctory-NVIDIA' = $victoryNvidiaScript
+        'Vice-Tay' = $viceTayExe
+        'Skrypt Vice-Tay' = $viceTayScript
         'cool_fox (DoubleGhosty)' = $coolFoxExe
         'ScarlettPort 0.4.5' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
