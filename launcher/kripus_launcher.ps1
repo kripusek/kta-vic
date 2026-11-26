@@ -577,6 +577,7 @@ function Get-LaunchPlan {
         $workDir = $cgbjDir
         $environment.VICTORY_GAME_DIR = $gameDir
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
+        $environment.VICTORY_WAVE_WIDE = '1'
         $arguments = @('/c', $cgbjCmd, 'pareto-residency')
     } elseif ($optScarlettPort.IsChecked -or $optScarlettPortDebug.IsChecked) {
         Require-File $scarlettExe
