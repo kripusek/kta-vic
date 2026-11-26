@@ -547,6 +547,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button x:Name="btnLaunch" Grid.Column="0" Height="68" Margin="0,0,12,0" Cursor="Hand" BorderThickness="0">
@@ -577,7 +578,11 @@
                 </Button.Template>
             </Button>
 
-            <Button x:Name="btnExit" Grid.Column="1" Width="100" Height="68" Content="WYJŚCIE" Style="{StaticResource ActionButtonStyle}" FontSize="14" FontWeight="Bold"/>
+            <Border Grid.Column="1" Height="68" Background="#0E101B" BorderBrush="#1E2033" BorderThickness="1" CornerRadius="12" Padding="14,0" Margin="0,0,12,0">
+                <CheckBox x:Name="chkSkipMovie" Content="Skip Movie / Intro" IsChecked="False" Foreground="#CBD5E1" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Cursor="Hand" ToolTip="Auto-FastBoot/SkipCutscenes dla ScarlettPort oraz automatyczne wysyłanie Enter do okna gry przez pierwsze 120s dla pozostałych portów"/>
+            </Border>
+
+            <Button x:Name="btnExit" Grid.Column="2" Width="100" Height="68" Content="WYJŚCIE" Style="{StaticResource ActionButtonStyle}" FontSize="14" FontWeight="Bold"/>
         </Grid>
     </Grid>
 </Window>
@@ -606,6 +611,7 @@ $chkSafeSubmit = $window.FindName("chkSafeSubmit")
 $chkDred = $window.FindName("chkDred")
 $chkMaxWorkers = $window.FindName("chkMaxWorkers")
 $chkShowConsole = $window.FindName("chkShowConsole")
+$chkSkipMovie = $window.FindName("chkSkipMovie")
 
 $btnViewLogs = $window.FindName("btnViewLogs")
 $btnClearCache = $window.FindName("btnClearCache")
@@ -767,7 +773,12 @@ function Get-LaunchPlan {
         $exe = Join-Path $PSHOME 'powershell.exe'
         $workDir = $scarlettDir
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scarlettScript,
-            '-Game', $gameDir, '-Console', 'series-s', '-AutoInput', '-FastBoot', '-Look')
+            '-Game', $gameDir, '-Console', 'series-s', '-AutoInput', '-Look')
+        if ($chkSkipMovie.IsChecked) {
+            $arguments += '-FastBoot'
+            $environment.SCARLETT_FAST_BOOT = '1'
+            $environment.SCARLETT_SKIP_CUTSCENES = '1'
+        }
         $environment.SCARLETT_REBAR = '1'
         $environment.SCARLETT_INDIRECT_WINDOW = '1'
         $environment.SCARLETT_INDIRECT_KEEP = '1'
@@ -896,6 +907,8 @@ function Reset-LiveAnalyzer($ProfileName) {
     $liveState.Shaders = 0
     $liveState.Warnings = 0
     $liveState.Errors = 0
+    $liveState.StartedAt = [DateTime]::UtcNow
+    $liveState.LastSkipSent = [DateTime]::MinValue
     $liveState.Lines.Clear()
     $txtLiveStage.Text = "⏳ Inicjalizacja ($ProfileName)..."
     $txtLiveStage.Foreground = '#00F0FF'
@@ -927,8 +940,19 @@ function Read-NewLogLines($Path, [ref]$Offset) {
     }
 }
 
+if (-not ('KripusWin32' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class KripusWin32 {
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+}
+'@
+}
+
 function Update-LiveAnalyzer {
-    $proc = Get-Process -Name victory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $proc = Get-Process -Name victory, scarlett -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($proc) {
         $gb = [math]::Round($proc.WorkingSet64 / 1GB, 2)
         $txtLiveRam.Text = "$gb GB"
@@ -938,6 +962,18 @@ function Update-LiveAnalyzer {
 
     $job = $jobs['game']
     if (-not $job) { return }
+
+    if ($chkSkipMovie.IsChecked -and $proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero -and -not $optScarlettPortDebug.IsChecked) {
+        $now = [DateTime]::UtcNow
+        if (-not $liveState.StartedAt) { $liveState.StartedAt = $now }
+        if (-not $liveState.LastSkipSent) { $liveState.LastSkipSent = [DateTime]::MinValue }
+        $elapsed = ($now - $liveState.StartedAt).TotalSeconds
+        if ($elapsed -le 120 -and ($now - $liveState.LastSkipSent).TotalMilliseconds -ge 1500) {
+            [void][KripusWin32]::PostMessage($proc.MainWindowHandle, 0x0100, [IntPtr]0x0D, [IntPtr]::Zero)
+            [void][KripusWin32]::PostMessage($proc.MainWindowHandle, 0x0101, [IntPtr]0x0D, [IntPtr]::Zero)
+            $liveState.LastSkipSent = $now
+        }
+    }
 
     $newLines = @()
     if ($job.StdOut) {
