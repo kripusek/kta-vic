@@ -201,6 +201,25 @@
                     <StackPanel Orientation="Vertical">
                         <TextBlock Text="✅ DZIAŁAJĄCE GRAFICZNIE (OŚWIETLONY ŚWIAT / 3D)" FontSize="13" FontWeight="Bold" Foreground="#38EF7D" Margin="0,0,0,10"/>
 
+                        <!-- Preset 0 (Working): CGBJ pareto-residency -->
+                        <RadioButton x:Name="optCgbj" Style="{StaticResource PresetCardStyle}" IsChecked="True">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency • 13-22 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Series S + RTX residency + VICTORY_THIN=1 + AMBIENT=0.8 + CARD_STEPS=2 (41 min bez crasha)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#3A1530" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="CGBJ NEW" FontSize="9" FontWeight="Black" Foreground="#FF007F"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
                         <!-- Preset 1 (Working): ScarlettPort Lit World -->
                         <RadioButton x:Name="optScarlettPort" Style="{StaticResource PresetCardStyle}">
                             <Grid>
@@ -221,7 +240,7 @@
                         </RadioButton>
 
                         <!-- Preset 2 (Working): ScarlettPort FastBoot + Experimental -->
-                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}" IsChecked="True">
+                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -436,6 +455,7 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
+$optCgbj = $window.FindName("optCgbj")
 $optScarlettPort = $window.FindName("optScarlettPort")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
 $optNvidia8gb = $window.FindName("optNvidia8gb")
@@ -475,9 +495,12 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
+$cgbjDir = Join-Path $root 'victory-cgbj'
 $nvidia8gbDir = Join-Path $root 'victory-nvidia-8gb'
 $forkDir = Join-Path $root 'victory-fork'
 $scarlettDir = Join-Path $root 'ScarlettPort'
+$cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
+$cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
 $nvidia8gbExe = Join-Path $nvidia8gbDir 'target\release\victory.exe'
 $nvidia8gbScript = Join-Path $nvidia8gbDir 'scripts\play-nvidia-8gb.ps1'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
@@ -546,7 +569,16 @@ function Get-LaunchPlan {
         VICTORY_GPU_TIMING = $null
     }
 
-    if ($optScarlettPort.IsChecked -or $optScarlettPortDebug.IsChecked) {
+    if ($optCgbj.IsChecked) {
+        Require-File $cgbjExe
+        Require-File $cgbjCmd
+        $profile = 'CGBJ / cool_fox (pareto-residency)'
+        $exe = 'cmd.exe'
+        $workDir = $cgbjDir
+        $environment.VICTORY_GAME_DIR = $gameDir
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
+        $arguments = @('/c', $cgbjCmd, 'pareto-residency')
+    } elseif ($optScarlettPort.IsChecked -or $optScarlettPortDebug.IsChecked) {
         Require-File $scarlettExe
         Require-File $scarlettScript
         $profile = 'ScarlettPort'
@@ -617,7 +649,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optScarlettPort, $optScarlettPortDebug, $optNvidia8gb, $optVictoryFork)) {
+foreach ($preset in @($optCgbj, $optScarlettPort, $optScarlettPortDebug, $optNvidia8gb, $optVictoryFork)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -842,6 +874,8 @@ $btnClearCache.Add_Click({
 $btnCheckStatus.Add_Click({
     $checks = [ordered]@{
         'Plik gry' = $gameExe
+        'CGBJ / cool_fox' = $cgbjExe
+        'Skrypt CGBJ' = $cgbjCmd
         'ScarlettPort' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
         'NVIDIA 8GB (soldsawn)' = $nvidia8gbExe
