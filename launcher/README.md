@@ -1,6 +1,6 @@
 # GTA6 Compatibility Project (`kripusek/kta-vic`)
 
-Projekt integrujący warstwę kompatybilności **VIctory** wraz z najnowszymi, aktywnymi forkami społecznościowymi pod Windows PC.
+Projekt integrujący warstwę kompatybilności **VIctory** wraz z najnowszymi, aktywnymi forkami społecznościowymi pod Windows PC (NVIDIA RTX).
 
 ## Profile w launcherze (`kripus_launcher.ps1`)
 
@@ -8,17 +8,10 @@ Launcher zawiera wyłącznie profile z **działającą grafiką 3D** oraz wbudow
 
 | Profil | Źródło / Fork | Stan i uwagi |
 |--------|---------------|--------------|
-| **🦊 CGBJ / cool_fox (`pareto-residency`)** | `cputroll/cgbj-reupload` (`f4b48ad`) / `Pavl3000/cgbj-fork` | Najnowszy przełom: **13–22 FPS** (`VICTORY_THIN=1`, `JOIN_PARTS=8`, `CARD_STEPS=2`, `AMBIENT=0.8`, `Series S` + RTX residency, sesje do 41 min bez crasha) |
-| **🚀 ScarlettPort — FastBoot + Experimental** | `ZigZagBoi1/ScarlettPort` (`925f90a`) | `-FastBoot -AutoInput` + `REBAR=1` + `INDIRECT_WINDOW/KEEP` |
-| **🌴 ScarlettPort v0.3.1** | `ZigZagBoi1/ScarlettPort` (`925f90a`) | Pełna prekompilacja potoków (`25 200`), najlepsze pokrycie shaderów postaci |
-| **💎 NVIDIA 8GB (Series S + Mip Drop=2)** | `soldsawn/victory-nvidia-8gb` | Optymalizacja pod karty 8 GB VRAM (`1920x1080`, Wave32, nakładka `F10`) |
-| **⚡ fxceless/victory-fork** | `fxceless/victory-fork` (`988aa41`) | Build z `VICTORY_INDIRECT_GATHER=1` (wymuszony `series-s`) |
-
-## Sprawdzone źródła (2026-11-26)
-- `cputroll/cgbj-reupload` (`f4b48ad` — mirror `codec-d/cool_fox`)
-- `Pavl3000/cgbj-fork` (`2eb9b22` — mirror z commitami z `avatarmanz/VIctory-7900XTX`)
-- `ZigZagBoi1/ScarlettPort` (`v0.3.1` @ `925f90a`)
-- `soldsawn/victory-nvidia-8gb`
-- `fxceless/victory-fork` (`988aa41`)
+| **🚀 VIctory-NVIDIA (~20 FPS + pełne drawy)** *(domyślny)* | `trustno1-coder/VIctory-NVIDIA` | Naprawa limitu deskryptorów NVIDIA (`VICTORY_DYNAMIC_SLOTS=524288`), `Series S` 0.5x + `OWN_UPSCALER`, `NAN_SCRUB=1`, `BVH_MISS=1`, porównania pamięci na GPU (~20–22 FPS na RTX 5070) |
+| **🎨 VIctory-NVIDIA Quality (~13 FPS)** | `trustno1-coder/VIctory-NVIDIA` | Tryb `-Quality`: mniej rozciągniętych ciał i tęczowej skóry |
+| **🦊 DoubleGhosty/cool_fox** | `DoubleGhosty/cool_fox` | Kontynuacja CGBJ (`Pareto residency`, LOD fix, sync wideo NVIDIA) + `VICTORY_OWN_UPSCALER=1` |
+| **🌴 ScarlettPort v0.4.5 (Look + FastBoot + ReBAR)** | `ZigZagBoi1/ScarlettPort` (`f300de1`) | Nowy silnik `engine/scarlett.exe`, preset `-Look`, `-FastBoot -AutoInput`, `REBAR=1` |
+| **⚡ fxceless/victory-fork (`e4245f3`)** | `fxceless/victory-fork` (`e4245f3`) | Naprawa czarnych twarzy, ruszające się usta (PR #927), `-10 ms/klatkę`, wymuszony `series-s` |
 
 Szczegółowa dokumentacja znajduje się w [victory/README.md](victory/README.md).

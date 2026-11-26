@@ -201,46 +201,8 @@
                     <StackPanel Orientation="Vertical">
                         <TextBlock Text="✅ DZIAŁAJĄCE GRAFICZNIE (OŚWIETLONY ŚWIAT / 3D)" FontSize="13" FontWeight="Bold" Foreground="#38EF7D" Margin="0,0,0,10"/>
 
-                        <!-- Preset 0 (Working): CGBJ pareto-residency -->
-                        <RadioButton x:Name="optCgbj" Style="{StaticResource PresetCardStyle}" IsChecked="True">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency • 13-22 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Series S + RTX residency + VICTORY_THIN=1 + AMBIENT=0.8 + CARD_STEPS=2 (41 min bez crasha)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#3A1530" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="CGBJ NEW" FontSize="9" FontWeight="Black" Foreground="#FF007F"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 1 (Working): ScarlettPort Lit World -->
-                        <RadioButton x:Name="optScarlettPort" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🌴" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="ScarlettPort v0.3.1 (Lit World + KBM + Own Upscaler)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Oświetlony świat (fx-cand / precompiled), klawiatura+mysz, AutoInput, Agility SDK" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#0F332B" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="ZALECANY" FontSize="9" FontWeight="Black" Foreground="#10B981"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 2 (Working): ScarlettPort FastBoot + Experimental -->
-                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}">
+                        <!-- Preset 0 (Working): VIctory-NVIDIA (trustno1-coder) -->
+                        <RadioButton x:Name="optVictoryNvidia" Style="{StaticResource PresetCardStyle}" IsChecked="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -249,30 +211,68 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🚀" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="ScarlettPort — FastBoot + ReBAR + Experimental" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Najbliżej grywalności: -FastBoot -AutoInput + REBAR=1 + INDIRECT_WINDOW + KEEP" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA (trustno1-coder • ~20 FPS + pełne drawy)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Naprawa limitu deskryptorów NVIDIA, Series S 0.5x + Own Upscaler, NAN_SCRUB, BVH_MISS" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
+                                <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="20 FPS" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 3 (Working): NVIDIA 8GB (soldsawn/victory-nvidia-8gb) -->
-                        <RadioButton x:Name="optNvidia8gb" Style="{StaticResource PresetCardStyle}">
+                        <!-- Preset 1 (Working): VIctory-NVIDIA Quality -->
+                        <RadioButton x:Name="optVictoryNvidiaQuality" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="💎" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBlock Text="🎨" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="NVIDIA 8GB (Series S + Mip Drop=2 + 1080p)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Wymuszone --console series-s (naprawa skalowania 1/4 ekranu), Wave32, F10 overlay" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA Quality (~13 FPS • lepsze postacie/skóra)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Tryb -Quality: mniej rozciągniętych ciał i tęczowej skóry na RTX" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#0F2D3D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="RTX 8GB" FontSize="9" FontWeight="Black" Foreground="#00F0FF"/>
+                                    <TextBlock Text="QUALITY" FontSize="9" FontWeight="Black" Foreground="#00F0FF"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 2 (Working): DoubleGhosty/cool_fox -->
+                        <RadioButton x:Name="optCoolFox" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="DoubleGhosty/cool_fox (CGBJ Continuation)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Pareto residency, LOD fix, sync wideo NVIDIA + VICTORY_OWN_UPSCALER=1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#3A1530" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="COOL_FOX" FontSize="9" FontWeight="Black" Foreground="#FF007F"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 3 (Working): ScarlettPort v0.4.5 Look + FastBoot -->
+                        <RadioButton x:Name="optScarlettPortDebug" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🌴" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="ScarlettPort v0.4.5 (Look + FastBoot + ReBAR)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Nowe poprawki obrazu/shaderów (-Look -FastBoot -AutoInput) + REBAR=1 + scarlett.exe" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="v0.4.5" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -287,11 +287,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="fxceless/victory-fork (988aa41 • ~10 FPS + Indirect Gather)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Oświetlony prolog 8-10 FPS (Series X, VICTORY_INDIRECT_GATHER=1, pełny zestaw flag)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="fxceless/victory-fork (e4245f3 • Black-Face + Mouths Fix)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Naprawa czarnych twarzy, ruszające się usta (PR #927), -10 ms/klatkę, series-s" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#2B153D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="10 FPS" FontSize="9" FontWeight="Black" Foreground="#D946EF"/>
+                                    <TextBlock Text="LATEST" FontSize="9" FontWeight="Black" Foreground="#D946EF"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -455,10 +455,10 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
-$optCgbj = $window.FindName("optCgbj")
-$optScarlettPort = $window.FindName("optScarlettPort")
+$optVictoryNvidia = $window.FindName("optVictoryNvidia")
+$optVictoryNvidiaQuality = $window.FindName("optVictoryNvidiaQuality")
+$optCoolFox = $window.FindName("optCoolFox")
 $optScarlettPortDebug = $window.FindName("optScarlettPortDebug")
-$optNvidia8gb = $window.FindName("optNvidia8gb")
 $optVictoryFork = $window.FindName("optVictoryFork")
 
 $chkClzero = $window.FindName("chkClzero")
@@ -495,16 +495,16 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
-$cgbjDir = Join-Path $root 'victory-cgbj'
-$nvidia8gbDir = Join-Path $root 'victory-nvidia-8gb'
+$victoryNvidiaDir = Join-Path $root 'victory-nvidia'
+$coolFoxDir = Join-Path $root 'victory-coolfox'
 $forkDir = Join-Path $root 'victory-fork'
 $scarlettDir = Join-Path $root 'ScarlettPort'
-$cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
-$cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
-$nvidia8gbExe = Join-Path $nvidia8gbDir 'target\release\victory.exe'
-$nvidia8gbScript = Join-Path $nvidia8gbDir 'scripts\play-nvidia-8gb.ps1'
+$victoryNvidiaExe = Join-Path $victoryNvidiaDir 'target\release\victory.exe'
+$victoryNvidiaScript = Join-Path $victoryNvidiaDir 'scripts\play-nvidia.ps1'
+$coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
+$coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
-$scarlettExe = Join-Path $scarlettDir 'runtime\victory\target\release\victory.exe'
+$scarlettExe = Join-Path $scarlettDir 'engine\target\release\scarlett.exe'
 $scarlettScript = Join-Path $scarlettDir 'scripts\play-victory.ps1'
 $dataDir = Join-Path $root 'victory-data'
 $logDir = Join-Path $dataDir 'launcher-logs'
@@ -569,57 +569,40 @@ function Get-LaunchPlan {
         VICTORY_GPU_TIMING = $null
     }
 
-    if ($optCgbj.IsChecked) {
-        Require-File $cgbjExe
-        Require-File $cgbjCmd
-        $profile = 'CGBJ / cool_fox (pareto-residency)'
+    if ($optVictoryNvidia.IsChecked -or $optVictoryNvidiaQuality.IsChecked) {
+        Require-File $victoryNvidiaExe
+        Require-File $victoryNvidiaScript
+        $profile = 'VIctory-NVIDIA (~20 FPS)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $victoryNvidiaDir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $victoryNvidiaScript,
+            '-Exe', $gameExe, '-Build', 'release')
+        if ($optVictoryNvidiaQuality.IsChecked) {
+            $profile = 'VIctory-NVIDIA Quality (~13 FPS)'
+            $arguments += '-Quality'
+        }
+    } elseif ($optCoolFox.IsChecked) {
+        Require-File $coolFoxExe
+        Require-File $coolFoxCmd
+        $profile = 'DoubleGhosty/cool_fox'
         $exe = $env:ComSpec
-        $workDir = $cgbjDir
+        $workDir = $coolFoxDir
         $environment.VICTORY_GAME_DIR = $gameDir
-        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-coolfox'
         $environment.VICTORY_OWN_UPSCALER = '1'
-        $arguments = @('/c', $cgbjCmd, 'pareto-residency')
-    } elseif ($optScarlettPort.IsChecked -or $optScarlettPortDebug.IsChecked) {
+        $arguments = @('/c', $coolFoxCmd)
+    } elseif ($optScarlettPortDebug.IsChecked) {
         Require-File $scarlettExe
         Require-File $scarlettScript
-        $profile = 'ScarlettPort'
+        $profile = 'ScarlettPort v0.4.5 (Look + FastBoot)'
         $exe = Join-Path $PSHOME 'powershell.exe'
         $workDir = $scarlettDir
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scarlettScript,
-            '-Game', $gameDir, '-Console', 'series-s', '-AutoInput')
-        $environment.VICTORY_FALLBACK_LIGHT = $null
-        $environment.VICTORY_REBAR = $null
-        $environment.VICTORY_FAST_BOOT = $null
-        if ($optScarlettPortDebug.IsChecked) {
-            $profile = 'ScarlettPort FastBoot + Experimental'
-            $environment.VICTORY_REBAR = '1'
-            $environment.VICTORY_INDIRECT_WINDOW = '1'
-            $environment.VICTORY_INDIRECT_KEEP = '1'
-            $environment.VICTORY_TABLED_SKIP_FRAMES = '2'
-            $arguments += '-FastBoot'
-        }
-    } elseif ($optNvidia8gb.IsChecked) {
-        Require-File $nvidia8gbExe
-        $profile = 'NVIDIA 8GB (Series S + Mip Drop=2)'
-        $exe = $nvidia8gbExe
-        $workDir = $nvidia8gbDir
-        $environment.VICTORY_RESOLUTION = '1920x1080'
-        $environment.VICTORY_TEXTURE_DROP_MIPS = '2'
-        $environment.VICTORY_COPY_PLAIN = '1'
-        $environment.VICTORY_INDIRECT_GATHER = '1'
-        $environment.VICTORY_HEAP_WORKER = '1'
-        $environment.VICTORY_ALIAS_ONCE = '1'
-        $environment.VICTORY_JOIN_PARTS = '1'
-        $environment.VICTORY_BACK_OWN_VIEW = '1'
-        $environment.VICTORY_INDIRECT_WINDOW_DRAWS = '1'
-        $environment.VICTORY_GUARD_HOLES_FRAME = '1'
-        $environment.VICTORY_COPY_CHANGED = '1'
-        $environment.VICTORY_CARD_WINDOWS_MB = '2048'
-        $environment.VICTORY_CARD_BUFFERS_MB = '1024'
-        $environment.VICTORY_CLAMP_WAITS = '0'
-        $environment.VICTORY_WIDE_MERGE = '1'
-        $environment.VICTORY_RELAY_OWN_QUEUE = '1'
-        $arguments = @('run', '--execute', '--console', 'series-s', $gameExe)
+            '-Game', $gameDir, '-Console', 'series-s', '-AutoInput', '-FastBoot', '-Look')
+        $environment.SCARLETT_REBAR = '1'
+        $environment.SCARLETT_INDIRECT_WINDOW = '1'
+        $environment.SCARLETT_INDIRECT_KEEP = '1'
+        $environment.SCARLETT_TABLED_SKIP_FRAMES = '2'
     } elseif ($optVictoryFork.IsChecked) {
         $profile = 'fxceless/victory-fork (~10 FPS)'
         $exe = $forkExe
@@ -650,7 +633,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optCgbj, $optScarlettPort, $optScarlettPortDebug, $optNvidia8gb, $optVictoryFork)) {
+foreach ($preset in @($optVictoryNvidia, $optVictoryNvidiaQuality, $optCoolFox, $optScarlettPortDebug, $optVictoryFork)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -875,12 +858,11 @@ $btnClearCache.Add_Click({
 $btnCheckStatus.Add_Click({
     $checks = [ordered]@{
         'Plik gry' = $gameExe
-        'CGBJ / cool_fox' = $cgbjExe
-        'Skrypt CGBJ' = $cgbjCmd
-        'ScarlettPort' = $scarlettExe
+        'VIctory-NVIDIA' = $victoryNvidiaExe
+        'Skrypt VIctory-NVIDIA' = $victoryNvidiaScript
+        'cool_fox (DoubleGhosty)' = $coolFoxExe
+        'ScarlettPort 0.4.5' = $scarlettExe
         'Skrypt ScarlettPort' = $scarlettScript
-        'NVIDIA 8GB (soldsawn)' = $nvidia8gbExe
-        'Skrypt NVIDIA 8GB' = $nvidia8gbScript
         'fxceless victory-fork' = $forkExe
         'Skrypt Steam' = $steamScript
     }
