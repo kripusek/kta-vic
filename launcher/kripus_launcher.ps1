@@ -287,8 +287,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🐶" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Victory Corgi (8b6671cc • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Najnowszy build Corgansm/victory-corgi (poprawki oświetlenia i 10 shaderów)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Victory Corgi (8b6671cc • Series X)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Na starcie ekran bywa czarny; gdy pojawi się PLAYER, naciśnij Enter lub A (Series X)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="CORGI" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
@@ -626,7 +626,7 @@ function Get-LaunchPlan {
         $profile = 'Victory Corgi (8b6671cc)'
         $exe = $corgiExe
         $workDir = $corgiDir
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
     } else {
         throw 'Wybierz jeden z profili graficznych.'
     }
