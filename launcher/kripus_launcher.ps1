@@ -573,7 +573,7 @@ function Get-LaunchPlan {
         Require-File $cgbjExe
         Require-File $cgbjCmd
         $profile = 'CGBJ / cool_fox (pareto-residency)'
-        $exe = 'cmd.exe'
+        $exe = $env:ComSpec
         $workDir = $cgbjDir
         $environment.VICTORY_GAME_DIR = $gameDir
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
