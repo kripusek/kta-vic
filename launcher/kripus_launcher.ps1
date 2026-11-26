@@ -287,8 +287,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🐶" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Victory Corgi (8b6671cc • Series X)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Na starcie ekran bywa czarny; gdy pojawi się PLAYER, naciśnij Enter lub A (Series X)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Victory Corgi (8b6671cc • NVIDIA Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Oficjalny profil play-nvidia.ps1 (COMPOSE=1, DYNAMIC_SLOTS=524288, OWN_UPSCALER=1, skala 0.5)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="CORGI" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
@@ -506,6 +506,7 @@ $coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
 $coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
 $forkExe = Join-Path $forkDir 'target\release\victory.exe'
 $corgiExe = Join-Path $corgiDir 'target\release\victory.exe'
+$corgiScript = Join-Path $corgiDir 'scripts\play-nvidia.ps1'
 $scarlettExe = Join-Path $scarlettDir 'engine\target\release\scarlett.exe'
 $scarlettScript = Join-Path $scarlettDir 'scripts\play-victory.ps1'
 $dataDir = Join-Path $root 'victory-data'
@@ -623,10 +624,12 @@ function Get-LaunchPlan {
         $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
     } elseif ($optVictoryCorgi.IsChecked) {
         Require-File $corgiExe
-        $profile = 'Victory Corgi (8b6671cc)'
-        $exe = $corgiExe
+        Require-File $corgiScript
+        $profile = 'Victory Corgi (8b6671cc • play-nvidia.ps1)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
         $workDir = $corgiDir
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-x')
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $corgiScript,
+            '-Exe', $gameExe, '-Build', 'release', '-NoSmoothMotion')
     } else {
         throw 'Wybierz jeden z profili graficznych.'
     }
@@ -871,6 +874,7 @@ $btnCheckStatus.Add_Click({
         'Skrypt ScarlettPort' = $scarlettScript
         'fxceless victory-fork' = $forkExe
         'Victory Corgi' = $corgiExe
+        'Skrypt Victory Corgi' = $corgiScript
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
