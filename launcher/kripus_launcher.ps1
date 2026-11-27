@@ -221,63 +221,6 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 2: KatanaCZ/Prometheus -->
-                        <RadioButton x:Name="optPrometheus" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🔥" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="KatanaCZ/Prometheus (avatarmanz + PORT_* • Series S)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Fork VIctory-7900XTX: VICTORY_PORT_CONSTANTS/DESCRIPTORS/CBV/GUARD=1 + skala 0.5" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#3B1D0A" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="PROMETHEUS" FontSize="9" FontWeight="Black" Foreground="#FB923C"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 3: ScarlettPort v0.5.4+ -->
-                        <RadioButton x:Name="optScarlettPort" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🌴" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="ScarlettPort v0.5.4+ (Look + AutoInput + F11)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Własny upscaler gry, fixy pod NVIDIA z Belobug/avatarmanz, play-scarlett.ps1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="v0.5.4+" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 4: DoubleGhosty/cool_fox (updated 42b95b9) -->
-                        <RadioButton x:Name="optCoolFox" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="DoubleGhosty/cool_fox (42b95b9 • Worker Rescue)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Dzisiejszy update: pipeline worker rescue (#39) + Hasusmogus merge + OWN_UPSCALER=1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#3A1530" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="COOL_FOX" FontSize="9" FontWeight="Black" Foreground="#FF007F"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -443,9 +386,6 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
 $optCgbj = $window.FindName("optCgbj")
-$optPrometheus = $window.FindName("optPrometheus")
-$optScarlettPort = $window.FindName("optScarlettPort")
-$optCoolFox = $window.FindName("optCoolFox")
 
 $chkClzero = $window.FindName("chkClzero")
 $chkSafeSubmit = $window.FindName("chkSafeSubmit")
@@ -485,14 +425,6 @@ $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $cgbjDir = Join-Path $root 'victory-cgbj'
 $cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
 $cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
-$prometheusDir = Join-Path $root 'victory-prometheus'
-$prometheusExe = Join-Path $prometheusDir 'target\release\victory.exe'
-$scarlettDir = Join-Path $root 'ScarlettPort'
-$scarlettExe = Join-Path $scarlettDir 'engine\target\release\scarlett.exe'
-$scarlettScript = Join-Path $scarlettDir 'scripts\play-scarlett.ps1'
-$coolFoxDir = Join-Path $root 'victory-coolfox'
-$coolFoxExe = Join-Path $coolFoxDir 'target\release\victory.exe'
-$coolFoxCmd = Join-Path $coolFoxDir 'Play-VIctory.cmd'
 $dataDir = Join-Path $root 'victory-data'
 $logDir = Join-Path $dataDir 'launcher-logs'
 $steamScript = Join-Path $root 'dodaj_do_steama.py'
@@ -566,58 +498,6 @@ function Get-LaunchPlan {
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
         $environment.VICTORY_OWN_UPSCALER = '1'
         $arguments = @('/c', $cgbjCmd, 'pareto-residency')
-    } elseif ($optPrometheus.IsChecked) {
-        Require-File $prometheusExe
-        $profile = 'KatanaCZ/Prometheus (Series S)'
-        $exe = $prometheusExe
-        $workDir = $prometheusDir
-        $environment.VICTORY_PORT_CONSTANTS = '1'
-        $environment.VICTORY_PORT_DESCRIPTORS = '1'
-        $environment.VICTORY_PORT_CBV = '1'
-        $environment.VICTORY_PORT_GUARD = '1'
-        $environment.VICTORY_TEXTURE_NO_WAIT = '1'
-        $environment.VICTORY_RELAY = '2'
-        $environment.VICTORY_WIDE_BACK = '1'
-        $environment.VICTORY_CARD_REHASH_RUNS = '1'
-        $environment.VICTORY_JOIN_COPIES = '1'
-        $environment.VICTORY_INDIRECT_WINDOW = '1'
-        $environment.VICTORY_RELAY_COPY = '1'
-        $environment.VICTORY_CARD_STEPS = '2'
-        $environment.VICTORY_INDIRECT_BATCH = '2'
-        $environment.VICTORY_MAP_THREADS = '1'
-        $environment.VICTORY_TITLE_PRIORITIES = '0'
-        $environment.VICTORY_CARD_AWAKE = '1'
-        $environment.VICTORY_SHOW_AFTER = '1'
-        $environment.VICTORY_AMBIENT = '0.8'
-        $environment.VICTORY_D3D12_DRED = 'light'
-        $environment.VICTORY_THIN = '1'
-        $environment.VICTORY_JOIN_PARTS = '8'
-        $environment.VICTORY_UPLOAD_AHEAD = '1'
-        $environment.VICTORY_RENDER_SCALE = '0.5'
-        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
-    } elseif ($optScarlettPort.IsChecked) {
-        Require-File $scarlettExe
-        Require-File $scarlettScript
-        $profile = 'ScarlettPort v0.5.4+ (Look + AutoInput)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $workDir = $scarlettDir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scarlettScript,
-            '-Game', $gameDir, '-Console', 'series-s', '-AutoInput', '-Look')
-        if ($chkSkipMovie.IsChecked) {
-            $arguments += '-FastBoot'
-            $environment.SCARLETT_FAST_BOOT = '1'
-            $environment.SCARLETT_SKIP_CUTSCENES = '1'
-        }
-    } elseif ($optCoolFox.IsChecked) {
-        Require-File $coolFoxExe
-        Require-File $coolFoxCmd
-        $profile = 'DoubleGhosty/cool_fox (42b95b9)'
-        $exe = $env:ComSpec
-        $workDir = $coolFoxDir
-        $environment.VICTORY_GAME_DIR = $gameDir
-        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-coolfox'
-        $environment.VICTORY_OWN_UPSCALER = '1'
-        $arguments = @('/c', $coolFoxCmd)
     } else {
         throw 'Wybierz profil graficzny.'
     }
@@ -630,9 +510,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optCgbj, $optPrometheus, $optScarlettPort, $optCoolFox)) {
-    $preset.Add_Checked($refreshEngineOptions)
-}
+$optCgbj.Add_Checked($refreshEngineOptions)
 & $refreshEngineOptions
 
 $liveState = @{
@@ -882,10 +760,6 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'CGBJ / cool_fox' = $cgbjExe
         'Skrypt CGBJ' = $cgbjCmd
-        'Prometheus' = $prometheusExe
-        'ScarlettPort 0.5.4+' = $scarlettExe
-        'Skrypt ScarlettPort' = $scarlettScript
-        'cool_fox (42b95b9)' = $coolFoxExe
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
