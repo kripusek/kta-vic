@@ -221,6 +221,25 @@
                             </Grid>
                         </RadioButton>
 
+                        <!-- Preset 2: Kemerd/VIctory-NVIDIA-RT -->
+                        <RadioButton x:Name="optNvidiaRt" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Kemerd/VIctory-NVIDIA-RT (Series S • -Fast • Menu F1)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="play-foxhound.ps1 -SeriesS -Dlss off -Fast (25-30 FPS na 3070 8GB wg Discorda)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="NVIDIA-RT" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -386,6 +405,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
 $optCgbj = $window.FindName("optCgbj")
+$optNvidiaRt = $window.FindName("optNvidiaRt")
 
 $chkClzero = $window.FindName("chkClzero")
 $chkSafeSubmit = $window.FindName("chkSafeSubmit")
@@ -425,6 +445,9 @@ $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $cgbjDir = Join-Path $root 'victory-cgbj'
 $cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
 $cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
+$nvidiaRtDir = Join-Path $root 'victory-nvidia-rt'
+$nvidiaRtExe = Join-Path $nvidiaRtDir 'target\release\victory.exe'
+$nvidiaRtScript = Join-Path $nvidiaRtDir 'scripts\play-foxhound.ps1'
 $dataDir = Join-Path $root 'victory-data'
 $logDir = Join-Path $dataDir 'launcher-logs'
 $steamScript = Join-Path $root 'dodaj_do_steama.py'
@@ -498,6 +521,14 @@ function Get-LaunchPlan {
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
         $environment.VICTORY_OWN_UPSCALER = '1'
         $arguments = @('/c', $cgbjCmd, 'pareto-residency')
+    } elseif ($optNvidiaRt.IsChecked) {
+        Require-File $nvidiaRtExe
+        Require-File $nvidiaRtScript
+        $profile = 'Kemerd/VIctory-NVIDIA-RT (Series S)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $nvidiaRtDir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
+            '-Exe', $gameExe, '-SeriesS', '-Dlss', 'off', '-Fast', '-Build', 'release')
     } else {
         throw 'Wybierz profil graficzny.'
     }
@@ -510,7 +541,9 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-$optCgbj.Add_Checked($refreshEngineOptions)
+foreach ($preset in @($optCgbj, $optNvidiaRt)) {
+    $preset.Add_Checked($refreshEngineOptions)
+}
 & $refreshEngineOptions
 
 $liveState = @{
@@ -760,6 +793,8 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'CGBJ / cool_fox' = $cgbjExe
         'Skrypt CGBJ' = $cgbjCmd
+        'VIctory-NVIDIA-RT' = $nvidiaRtExe
+        'Skrypt NVIDIA-RT' = $nvidiaRtScript
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
