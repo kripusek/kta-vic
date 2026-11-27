@@ -221,7 +221,7 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 2: Kemerd/VIctory-NVIDIA-RT -->
+                        <!-- Preset 2: VIctory-NVIDIA-RT test-10 (1255519) -->
                         <RadioButton x:Name="optNvidiaRt" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -231,11 +231,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Kemerd/VIctory-NVIDIA-RT (Series S • -Fast • Menu F1)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="play-foxhound.ps1 -SeriesS -Dlss off -Fast (25-30 FPS na 3070 8GB wg Discorda)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA-RT test-10 (1255519 • Series S • Fast)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Paczka test-10 z Discorda (25-30 FPS na 3070 16GB • play --series-s --dlss off • F1 menu, F3 stats)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="NVIDIA-RT" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
+                                    <TextBlock Text="TEST-10" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -445,9 +445,8 @@ $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $cgbjDir = Join-Path $root 'victory-cgbj'
 $cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
 $cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
-$nvidiaRtDir = Join-Path $root 'victory-nvidia-rt'
-$nvidiaRtExe = Join-Path $nvidiaRtDir 'target\release\victory.exe'
-$nvidiaRtScript = Join-Path $nvidiaRtDir 'scripts\play-foxhound.ps1'
+$nvidiaRtDir = Join-Path $root 'victory-nvidia-rt-test10'
+$nvidiaRtExe = Join-Path $nvidiaRtDir 'victory.exe'
 $dataDir = Join-Path $root 'victory-data'
 $logDir = Join-Path $dataDir 'launcher-logs'
 $steamScript = Join-Path $root 'dodaj_do_steama.py'
@@ -523,12 +522,44 @@ function Get-LaunchPlan {
         $arguments = @('/c', $cgbjCmd, 'pareto-residency')
     } elseif ($optNvidiaRt.IsChecked) {
         Require-File $nvidiaRtExe
-        Require-File $nvidiaRtScript
-        $profile = 'Kemerd/VIctory-NVIDIA-RT (Series S)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
+        $profile = 'VIctory-NVIDIA-RT test-10 (1255519 • Series S)'
+        $exe = $nvidiaRtExe
         $workDir = $nvidiaRtDir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
-            '-Exe', $gameExe, '-SeriesS', '-Dlss', 'off', '-Fast', '-Build', 'release')
+        $environment.VICTORY_PIPELINE_SAMPLER_TABLE = '1'
+        $environment.VICTORY_REFLEX = 'boost'
+        $environment.VICTORY_FULLSCREEN = '1'
+        $environment.VICTORY_HDR = '0'
+        $environment.VICTORY_PIPELINE_WAIT_ONCE = '1'
+        $environment.VICTORY_PIPELINE_WAIT_BACKLOG = '64'
+        $environment.VICTORY_PIPELINE_SLOW_WORKERS = '8'
+        $environment.VICTORY_TEXTURE_LOOK_ONCE = '1'
+        $environment.VICTORY_TEXTURE_READ_AHEAD = '1'
+        $environment.VICTORY_STAGING_NO_ZERO = '1'
+        $environment.VICTORY_SEND_COPIED_FIND = '1'
+        $environment.VICTORY_FILES_BUFFERED = '1'
+        $environment.VICTORY_MEMORY_FRESH = '1'
+        $environment.VICTORY_MEMORY_ARENAS_AHEAD = '1'
+        $environment.VICTORY_MEMORY_QUIET = '1'
+        $environment.VICTORY_MEMORY_LAND_SENT = '1'
+        $environment.VICTORY_MEMORY_ASK_RUNS = '1'
+        $environment.VICTORY_MEMORY_LEAN = '1'
+        $environment.VICTORY_MEMORY_DIRTY = '1'
+        $environment.VICTORY_MEMORY_BUFFER_FAULTS = '1'
+        $environment.VICTORY_MEMORY_FAULT_PAGES = '40000'
+        $environment.VICTORY_REFRESH_PROBE_US = '300'
+        $environment.VICTORY_DECLARE_ACROSS_LISTS = '1'
+        $environment.VICTORY_REFRESH_PROBE_TEXTURES = '1'
+        $environment.VICTORY_REFRESH_SPLIT = '1'
+        $environment.VICTORY_WAIT_SPLIT = '1'
+        $environment.VICTORY_DSTORAGE_STATS = '1'
+        $environment.VICTORY_PIPELINE_PIECES = '1'
+        $environment.VICTORY_PIPELINE_PIECES_REFUSE_UNTRANSLATED = '1'
+        $environment.VICTORY_PIPELINE_PIECES_ONLY = 'graphics'
+        $environment.VICTORY_REFRESH_SET = '1'
+        $environment.VICTORY_TITLE_WRITE_RANGE = '1'
+        $environment.VICTORY_UNDER_PARTS = '1'
+        $environment.VICTORY_SEND_THREAD = '1'
+        $arguments = @('play', $gameExe, '--series-s', '--res', '1440', '--dlss', 'off', '--no-framegen-ready', '--fps', '1000')
     } else {
         throw 'Wybierz profil graficzny.'
     }
@@ -793,8 +824,7 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'CGBJ / cool_fox' = $cgbjExe
         'Skrypt CGBJ' = $cgbjCmd
-        'VIctory-NVIDIA-RT' = $nvidiaRtExe
-        'Skrypt NVIDIA-RT' = $nvidiaRtScript
+        'VIctory-NVIDIA-RT test-10' = $nvidiaRtExe
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
