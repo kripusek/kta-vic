@@ -231,8 +231,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • 8GB Optimal)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Series S + DLSS Balanced + Reflex Boost + -Fast + FSR3 FG gotowe pod F1 (F3 staty)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • Sharp + Fast)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Series X 1440p + DLSS Performance (720p->1440p AI, pełne detale X) + -Fast + F1/F3" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="RT-TEST-11" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
@@ -524,14 +524,15 @@ function Get-LaunchPlan {
     } elseif ($optNvidiaRt.IsChecked) {
         Require-File $nvidiaRtExe
         Require-File $nvidiaRtScript
-        $profile = 'VIctory-NVIDIA-RT rt-test-11 (da309b8 • 8GB Optimal)'
+        $profile = 'VIctory-NVIDIA-RT rt-test-11 (da309b8 • Series X + DLSS Perf)'
         $exe = Join-Path $PSHOME 'powershell.exe'
         $workDir = $nvidiaRtDir
         $environment.VICTORY_REFLEX = 'boost'
         $environment.VICTORY_FULLSCREEN = '1'
         $environment.VICTORY_HDR = '0'
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
-            '-Exe', $gameExe, '-SeriesS', '-Dlss', 'balanced', '-FgType', 'fsr', '-Fast', '-Build', 'release')
+            '-Exe', $gameExe, '-Res', '1440', '-Dlss', 'performance', '-FgType', 'fsr', '-Fast', '-Build', 'release',
+            '-More', "@{VICTORY_TEXTURE_ROOM_PERCENT='78'}")
     } else {
         throw 'Wybierz profil graficzny.'
     }
