@@ -260,8 +260,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • 25-30 FPS FG)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Series X 1080to1440 + DLSS Balanced + FSR3 Frame Gen 2x + -Fast + F1/F3" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • Clean)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Series X 1080to1440 + DLSS Balanced + -Fast (bez FG, bez artefaktów) + F1/F3" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#DF1FDF" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
                                     <TextBlock Text="RT-TEST-11" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
@@ -596,14 +596,14 @@ function Get-LaunchPlan {
     } elseif ($optNvidiaRt.IsChecked) {
         Require-File $nvidiaRtExe
         Require-File $nvidiaRtScript
-        $profile = 'VIctory-NVIDIA-RT rt-test-11 (da309b8 • 1080to1440 + DLSS + FSR3 FG)'
+        $profile = 'VIctory-NVIDIA-RT rt-test-11 (da309b8 • 1080to1440 + DLSS Balanced)'
         $exe = Join-Path $PSHOME 'powershell.exe'
         $workDir = $nvidiaRtDir
         $environment.VICTORY_REFLEX = 'boost'
         $environment.VICTORY_FULLSCREEN = '1'
         $environment.VICTORY_HDR = '0'
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
-            '-Exe', $gameExe, '-Res', '1080to1440', '-Dlss', 'balanced', '-FrameGen', '-FgType', 'fsr', '-Fast', '-Build', 'release')
+            '-Exe', $gameExe, '-Res', '1080to1440', '-Dlss', 'balanced', '-NoFrameGenReady', '-Fast', '-Build', 'release')
     } else {
         throw 'Wybierz profil graficzny.'
     }
