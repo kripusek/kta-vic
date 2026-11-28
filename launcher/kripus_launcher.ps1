@@ -185,10 +185,29 @@
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
                                     <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • Clean)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Series X 1080to1440 + DLSS Balanced + -Fast (bez FG, bez artefaktów) + F1/F3" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
+                                    <TextBlock Text="NVIDIA RTX: Series X 1080to1440 + DLSS Balanced + -Fast (bez FG) + F1/F3" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" Background="#DF1FDF" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="RT-TEST-11" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="NVIDIA" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 2: VIctory-Belobug-AMD -->
+                        <RadioButton x:Name="optBelobug" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🔴" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="VIctory-Belobug-AMD (Radeon RDNA2/3/4 • Series S)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Dedykowany fork pod AMD Radeon (STRETCH=1, ASYNC_SUBMIT=1, HOIST_CLAMPS=7, quad-reads)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#FA017D" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="AMD" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -374,6 +393,7 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
 $optNvidiaRt = $window.FindName("optNvidiaRt")
+$optBelobug = $window.FindName("optBelobug")
 
 $chkClzero = $window.FindName("chkClzero")
 $chkSafeSubmit = $window.FindName("chkSafeSubmit")
@@ -415,6 +435,8 @@ $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $nvidiaRtDir = Join-Path $root 'victory-nvidia-rt'
 $nvidiaRtExe = Join-Path $nvidiaRtDir 'target\release\victory.exe'
 $nvidiaRtScript = Join-Path $nvidiaRtDir 'scripts\play-foxhound.ps1'
+$belobugDir = Join-Path $root 'victory-belobug'
+$belobugExe = Join-Path $belobugDir 'target\release\victory.exe'
 $dataDir = Join-Path $root 'victory-data'
 $logDir = Join-Path $dataDir 'launcher-logs'
 $steamScript = Join-Path $root 'dodaj_do_steama.py'
@@ -489,6 +511,17 @@ function Get-LaunchPlan {
         $environment.VICTORY_HDR = '0'
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
             '-Exe', $gameExe, '-Res', '1080to1440', '-Dlss', 'balanced', '-NoFrameGenReady', '-Fast', '-Build', 'release')
+    } elseif ($optBelobug.IsChecked) {
+        Require-File $belobugExe
+        $profile = 'VIctory-Belobug-AMD (Radeon • Series S)'
+        $exe = $belobugExe
+        $workDir = $belobugDir
+        $environment.VICTORY_AMBIENT = '0.6'
+        $environment.VICTORY_AMBIENT_REFLECT = '0.5'
+        $environment.VICTORY_HOIST_CLAMPS = '7'
+        $environment.VICTORY_ASYNC_SUBMIT = '1'
+        $environment.VICTORY_STRETCH = '1'
+        $arguments = @('run', $gameExe, '--execute', '--console', 'series-s')
     } else {
         throw 'Wybierz profil graficzny.'
     }
@@ -501,7 +534,9 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-$optNvidiaRt.Add_Checked($refreshEngineOptions)
+foreach ($preset in @($optNvidiaRt, $optBelobug)) {
+    $preset.Add_Checked($refreshEngineOptions)
+}
 & $refreshEngineOptions
 
 $liveState = @{
@@ -804,6 +839,7 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'VIctory-NVIDIA-RT rt-test-11' = $nvidiaRtExe
         'Skrypt play-foxhound.ps1' = $nvidiaRtScript
+        'VIctory-Belobug-AMD' = $belobugExe
         'Skrypt Steam' = $steamScript
     }
     $missing = 0
