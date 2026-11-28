@@ -603,8 +603,7 @@ function Get-LaunchPlan {
         $environment.VICTORY_FULLSCREEN = '1'
         $environment.VICTORY_HDR = '0'
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $nvidiaRtScript,
-            '-Exe', $gameExe, '-Res', '1440', '-Dlss', 'balanced', '-FgType', 'fsr', '-Fast', '-Build', 'release',
-            '-More', "@{VICTORY_TEXTURE_ROOM_PERCENT='85'}")
+            '-Exe', $gameExe, '-Res', '1440', '-Dlss', 'balanced', '-FgType', 'fsr', '-Fast', '-Build', 'release')
     } else {
         throw 'Wybierz profil graficzny.'
     }
