@@ -8,26 +8,21 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
         Background="#F5F5DC"
-        Foreground="#FAEBD7"
-        FontFamily="Segoe UI, Segoe UI Variable, sans-serif">
+        Foreground="#111111"
+        FontFamily="Segoe UI, Arial, sans-serif">
     
     <Window.Resources>
-        <!-- kripusek.top Palette -->
-        <SolidColorBrush x:Key="CardGradient" Color="#2A2A2A"/>
-        <SolidColorBrush x:Key="CardHoverGradient" Color="#363636"/>
+        <!-- kripusek.top Palette (no AI dark-mode gradients/glows) -->
+        <SolidColorBrush x:Key="CardGradient" Color="#FFFDF5"/>
+        <SolidColorBrush x:Key="CardHoverGradient" Color="#7FFFD4"/>
         <SolidColorBrush x:Key="LaunchButtonGradient" Color="#FA017D"/>
 
-        <!-- Drop Shadows -->
-        <DropShadowEffect x:Key="GlowCyan" Color="#00FFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.5"/>
-        <DropShadowEffect x:Key="GlowPink" Color="#FA017D" BlurRadius="16" ShadowDepth="0" Opacity="0.5"/>
-        <DropShadowEffect x:Key="SoftShadow" Color="#000000" BlurRadius="10" ShadowDepth="3" Opacity="0.45"/>
-
-        <!-- Custom Card RadioButton Style (.post-card + .button accent) -->
+        <!-- Custom Card RadioButton Style (kripusek.top light card + cyan active) -->
         <Style x:Key="PresetCardStyle" TargetType="RadioButton">
             <Setter Property="Background" Value="{StaticResource CardGradient}"/>
-            <Setter Property="BorderBrush" Value="#555555"/>
+            <Setter Property="BorderBrush" Value="#660085"/>
             <Setter Property="BorderThickness" Value="2"/>
-            <Setter Property="Foreground" Value="#FAEBD7"/>
+            <Setter Property="Foreground" Value="#111111"/>
             <Setter Property="Margin" Value="0,0,0,10"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -37,20 +32,19 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8"
-                                Padding="16,12"
-                                Effect="{StaticResource SoftShadow}">
+                                CornerRadius="5"
+                                Padding="14,10">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource CardHoverGradient}"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#00FFFF"/>
+                                <Setter TargetName="border" Property="Background" Value="#7FFFD4"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#660085"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#00FF00"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#FA017D"/>
                                 <Setter TargetName="border" Property="BorderThickness" Value="3"/>
-                                <Setter TargetName="border" Property="Background" Value="#660085"/>
+                                <Setter TargetName="border" Property="Background" Value="#00FFFF"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -109,34 +103,34 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#660085" Padding="3" CornerRadius="4" Effect="{StaticResource SoftShadow}">
+                <Border Background="#660085" Padding="3" CornerRadius="4">
                     <Border Background="#00FFFF" BorderBrush="#660085" BorderThickness="2" CornerRadius="2" Padding="18,6">
                         <TextBlock Text="Kripusek.top • GTA VI" FontSize="24" FontWeight="Black" Foreground="#111111"/>
                     </Border>
                 </Border>
-                <Border Background="#222222" CornerRadius="6" Margin="14,0,0,0" Padding="10,5" VerticalAlignment="Center" BorderBrush="#660085" BorderThickness="2">
-                    <TextBlock Text="VI CAUSEWAY LAUNCHER" FontSize="12" FontWeight="Bold" Foreground="#FF4FD9"/>
+                <Border Background="#00B7FF" CornerRadius="4" Margin="14,0,0,0" Padding="10,5" VerticalAlignment="Center" BorderBrush="#660085" BorderThickness="2">
+                    <TextBlock Text="VI CAUSEWAY LAUNCHER" FontSize="12" FontWeight="Bold" Foreground="#111111"/>
                 </Border>
             </StackPanel>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="8" Padding="12,6" Margin="0,0,8,0">
+                <Border Background="#FFFDF5" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="12,6" Margin="0,0,8,0">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🎮 GRA: " FontWeight="Bold" Foreground="#FAEBD7" FontSize="12"/>
-                        <TextBlock Text="GTA VI 1.0.2.1" FontWeight="Bold" Foreground="#00FF00" FontSize="12"/>
+                        <TextBlock Text="🎮 GRA: " FontWeight="Bold" Foreground="#333333" FontSize="12"/>
+                        <TextBlock Text="GTA VI 1.0.2.1" FontWeight="Bold" Foreground="#008800" FontSize="12"/>
                     </StackPanel>
                 </Border>
-                <Border Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="8" Padding="12,6">
+                <Border Background="#FFFDF5" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="12,6">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="👤 USER: " FontWeight="Bold" Foreground="#FAEBD7" FontSize="12"/>
-                        <TextBlock Text="kripusek" FontWeight="Bold" Foreground="#00FFFF" FontSize="12"/>
+                        <TextBlock Text="👤 USER: " FontWeight="Bold" Foreground="#333333" FontSize="12"/>
+                        <TextBlock Text="kripusek" FontWeight="Bold" Foreground="#660085" FontSize="12"/>
                     </StackPanel>
                 </Border>
             </StackPanel>
         </Grid>
 
-        <!-- 2. System Status Bar (.post-card) -->
-        <Border Grid.Row="1" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="14,10" Margin="0,0,0,16">
+        <!-- 2. System Status Bar -->
+        <Border Grid.Row="1" Background="#EFEBD6" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="14,10" Margin="0,0,0,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -146,23 +140,23 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0">
-                    <TextBlock Text="KARTA GRAFICZNA" FontSize="10" FontWeight="Bold" Foreground="#70789E"/>
-                    <TextBlock x:Name="txtGPU" Text="NVIDIA RTX 3060 Ti" FontSize="13" FontWeight="SemiBold" Foreground="#00F0FF" Margin="0,2,0,0"/>
+                    <TextBlock Text="KARTA GRAFICZNA" FontSize="10" FontWeight="Bold" Foreground="#660085"/>
+                    <TextBlock x:Name="txtGPU" Text="NVIDIA RTX 3060 Ti" FontSize="13" FontWeight="Bold" Foreground="#111111" Margin="0,2,0,0"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1">
-                    <TextBlock Text="ROZMIAR FALI SHADERÓW" FontSize="10" FontWeight="Bold" Foreground="#70789E"/>
-                    <TextBlock Text="Wave32 (PR #578 Safe)" FontSize="13" FontWeight="SemiBold" Foreground="#38EF7D" Margin="0,2,0,0"/>
+                    <TextBlock Text="ROZMIAR FALI SHADERÓW" FontSize="10" FontWeight="Bold" Foreground="#660085"/>
+                    <TextBlock Text="Wave32 (PR #578 Safe)" FontSize="13" FontWeight="Bold" Foreground="#007700" Margin="0,2,0,0"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2">
-                    <TextBlock Text="STAN KOMPILATORA" FontSize="10" FontWeight="Bold" Foreground="#70789E"/>
-                    <TextBlock Text="causeway-integration (OK)" FontSize="13" FontWeight="SemiBold" Foreground="#E2B714" Margin="0,2,0,0"/>
+                    <TextBlock Text="STAN KOMPILATORA" FontSize="10" FontWeight="Bold" Foreground="#660085"/>
+                    <TextBlock Text="causeway-integration (OK)" FontSize="13" FontWeight="Bold" Foreground="#995500" Margin="0,2,0,0"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="3">
-                    <TextBlock Text="TESTY SHADERÓW / GPU" FontSize="10" FontWeight="Bold" Foreground="#70789E"/>
-                    <TextBlock Text="243/243 ZALICZONE" FontSize="13" FontWeight="SemiBold" Foreground="#A78BFA" Margin="0,2,0,0"/>
+                    <TextBlock Text="TESTY SHADERÓW / GPU" FontSize="10" FontWeight="Bold" Foreground="#660085"/>
+                    <TextBlock Text="243/243 ZALICZONE" FontSize="13" FontWeight="Bold" Foreground="#660085" Margin="0,2,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -174,14 +168,13 @@
                 <ColumnDefinition Width="*"/>    <!-- Options & Log Preview -->
             </Grid.ColumnDefinitions>
 
-            <!-- Presets Section (.post-card) -->
-            <Border Grid.Column="0" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="18" Margin="0,0,12,0">
+            <!-- Presets Section -->
+            <Border Grid.Column="0" Background="#EFEBD6" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="18" Margin="0,0,12,0">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Orientation="Vertical">
-                        <TextBlock Text="✅ PORTY GTA VI (WYBIERZ PROFIL)" FontSize="13" FontWeight="Bold" Foreground="#FF4FD9" Margin="0,0,0,10"/>
+                        <TextBlock Text="✅ PORTY GTA VI (WYBIERZ PROFIL)" FontSize="13" FontWeight="Bold" Foreground="#660085" Margin="0,0,0,10"/>
 
-                        <!-- Preset 0 (Working): CGBJ pareto-residency + OWN_UPSCALER -->
-                        <!-- Preset 1: CGBJ / cool_fox (ONLY KEPT) -->
+                        <!-- Preset 1: CGBJ / cool_fox -->
                         <RadioButton x:Name="optCgbj" Style="{StaticResource PresetCardStyle}" IsChecked="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -191,11 +184,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency + OWN_UPSCALER=1)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Sprawdzony na RTX 3060 Ti: ~10 FPS + własny upscaler gry (bez crasha FSR4)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency + OWN_UPSCALER=1)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Sprawdzony na RTX 3060 Ti: ~10 FPS + własny upscaler gry (bez crasha FSR4)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
+                                <Border Grid.Column="2" Background="#00FF00" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#111111"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -210,11 +203,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🐉" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-Hydra (Series S • ~18-20 FPS / 37-40 z FG)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Zunifikowany fork cool_fox/VIctory (PORT_DESCRIPTORS/GUARD=1, AUTO_A=90, F1/F3)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-Hydra (Series S • ~18-20 FPS / 37-40 z FG)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Zunifikowany fork cool_fox/VIctory (PORT_DESCRIPTORS/GUARD=1, AUTO_A=90, F1/F3)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="HYDRA" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
+                                <Border Grid.Column="2" Background="#00B7FF" BorderBrush="#660085" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="HYDRA" FontSize="9" FontWeight="Black" Foreground="#111111"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -229,11 +222,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="💾" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="MiniVI (Dedykowany 8 GB VRAM • Series S • DLSS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Preset balanced-720p + limit VRAM DXGI + mip tiling + DLSS Quality + FSR3 FG pod F1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="MiniVI (Dedykowany 8 GB VRAM • Series S • DLSS)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Preset balanced-720p + limit VRAM DXGI + mip tiling + DLSS Quality + FSR3 FG pod F1" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="8GB VRAM" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
+                                <Border Grid.Column="2" Background="#00FF00" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="8GB VRAM" FontSize="9" FontWeight="Black" Foreground="#111111"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -248,11 +241,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🐱" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Kitty6 (Kitty Runtime • Series S • 20-30 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Publiczne repo Kitty Runtime na foxhound (mody .k6mod, panel F3, bez długiego prepare)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Kitty6 (Kitty Runtime • Series S • 20-30 FPS)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Publiczne repo Kitty Runtime na foxhound (mody .k6mod, panel F3, bez długiego prepare)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="KITTY6" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
+                                <Border Grid.Column="2" Background="#FA017D" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="KITTY6" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -267,11 +260,11 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • Sharp + Fast)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Series X 1440p + DLSS Performance (720p->1440p AI, pełne detale X) + -Fast + F1/F3" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                    <TextBlock Text="VIctory-NVIDIA-RT rt-test-11 (da309b8 • Sharp + Fast)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
+                                    <TextBlock Text="Series X 1440p + DLSS Performance (720p->1440p AI, pełne detale X) + -Fast + F1/F3" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <Border Grid.Column="2" Background="#133322" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="RT-TEST-11" FontSize="9" FontWeight="Black" Foreground="#4ADE80"/>
+                                <Border Grid.Column="2" Background="#DF1FDF" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="RT-TEST-11" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
                                 </Border>
                             </Grid>
                         </RadioButton>
@@ -280,8 +273,8 @@
                 </ScrollViewer>
             </Border>
 
-            <!-- Tweaks & Diagnostics Section (.post-card) -->
-            <Border Grid.Column="1" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="18">
+            <!-- Tweaks & Diagnostics Section -->
+            <Border Grid.Column="1" Background="#EFEBD6" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="18">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -290,20 +283,20 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="OPCJE SILNIKA I GRAFIKI" FontSize="14" FontWeight="Bold" Foreground="#FF4FD9" Margin="0,0,0,12"/>
+                    <TextBlock Grid.Row="0" Text="OPCJE SILNIKA I GRAFIKI" FontSize="14" FontWeight="Bold" Foreground="#660085" Margin="0,0,0,12"/>
 
                     <StackPanel Grid.Row="1" Margin="0,0,0,12">
-                        <CheckBox x:Name="chkClzero" Content="Aktywne buforowanie CLZERO (Wysoki FPS + Ochrona RAM)" IsChecked="True" Foreground="#CBD5E1" Margin="0,0,0,8" Cursor="Hand"/>
-                        <CheckBox x:Name="chkSafeSubmit" Content="Tryb Safe Submit (Tylko diagnostyka; obniża FPS!)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
-                        <CheckBox x:Name="chkDred" Content="D3D12 DRED &amp; Breadcrumbs (Narzut debuggera)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
-                        <CheckBox x:Name="chkMaxWorkers" Content="Limit workerów shaderów: 2 (Dla słabszych CPU)" IsChecked="False" Foreground="#94A3B8" Margin="0,0,0,8" Cursor="Hand"/>
-                        <CheckBox x:Name="chkShowConsole" Content="Osobne okno konsoli (bez podglądu stdout w analizatorze)" IsChecked="False" Foreground="#CBD5E1" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkClzero" Content="Aktywne buforowanie CLZERO (Wysoki FPS + Ochrona RAM)" IsChecked="True" Foreground="#111111" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkSafeSubmit" Content="Tryb Safe Submit (Tylko diagnostyka; obniża FPS!)" IsChecked="False" Foreground="#444444" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkDred" Content="D3D12 DRED &amp; Breadcrumbs (Narzut debuggera)" IsChecked="False" Foreground="#444444" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkMaxWorkers" Content="Limit workerów shaderów: 2 (Dla słabszych CPU)" IsChecked="False" Foreground="#444444" Margin="0,0,0,8" Cursor="Hand"/>
+                        <CheckBox x:Name="chkShowConsole" Content="Osobne okno konsoli (bez podglądu stdout w analizatorze)" IsChecked="False" Foreground="#111111" Margin="0,0,0,8" Cursor="Hand"/>
                     </StackPanel>
 
                     <!-- Quick Tools & Actions -->
-                    <Border Grid.Row="2" Background="#121422" BorderBrush="#1F2338" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,10">
+                    <Border Grid.Row="2" Background="#F5F5DC" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="10" Margin="0,0,0,10">
                         <StackPanel>
-                            <TextBlock Text="SZYBKIE NARZĘDZIA" FontSize="11" FontWeight="Bold" Foreground="#8A92B2" Margin="0,0,0,6"/>
+                            <TextBlock Text="SZYBKIE NARZĘDZIA" FontSize="11" FontWeight="Bold" Foreground="#660085" Margin="0,0,0,6"/>
                             <Grid Margin="0,0,0,6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -322,12 +315,12 @@
                             </Grid>
                             <Button x:Name="btnSteamSync" Content="🎮 Dodaj / Odśwież w Steam" Style="{StaticResource ActionButtonStyle}" Margin="0,0,0,0"/>
                             
-                            <TextBlock x:Name="txtToolStatus" Text="System gotowy. Wybierz profil i kliknij ODPAL." FontSize="11" Foreground="#38EF7D" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="txtToolStatus" Text="System gotowy. Wybierz profil i kliknij ODPAL." FontSize="11" FontWeight="Bold" Foreground="#007700" Margin="0,8,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
 
                     <!-- Real-Time Live Game Analyzer -->
-                    <Border Grid.Row="3" Background="#0A0C15" BorderBrush="#252A44" BorderThickness="1" CornerRadius="8" Padding="10">
+                    <Border Grid.Row="3" Background="#F5F5DC" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -337,8 +330,8 @@
                             </Grid.RowDefinitions>
 
                             <Grid Grid.Row="0" Margin="0,0,0,6">
-                                <TextBlock Text="📊 ANALIZATOR GRY NA ŻYWO" FontSize="11" FontWeight="Bold" Foreground="#00F0FF" HorizontalAlignment="Left"/>
-                                <TextBlock x:Name="txtLiveStage" Text="⏸ Oczekiwanie na start" FontSize="11" FontWeight="Bold" Foreground="#94A3B8" HorizontalAlignment="Right"/>
+                                <TextBlock Text="📊 ANALIZATOR GRY NA ŻYWO" FontSize="11" FontWeight="Bold" Foreground="#660085" HorizontalAlignment="Left"/>
+                                <TextBlock x:Name="txtLiveStage" Text="⏸ Oczekiwanie na start" FontSize="11" FontWeight="Bold" Foreground="#333333" HorizontalAlignment="Right"/>
                             </Grid>
 
                             <Grid Grid.Row="1" Margin="0,0,0,6">
@@ -347,12 +340,12 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                                    <TextBlock Text="FPS / KLATKA" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
-                                    <TextBlock x:Name="txtLiveFps" Text="--" FontSize="12" FontWeight="Bold" Foreground="#38EF7D"/>
+                                    <TextBlock Text="FPS / KLATKA" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveFps" Text="--" FontSize="12" FontWeight="Bold" Foreground="#007700"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="RAM PROCESU" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
-                                    <TextBlock x:Name="txtLiveRam" Text="--" FontSize="12" FontWeight="Bold" Foreground="#A78BFA"/>
+                                    <TextBlock Text="RAM PROCESU" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveRam" Text="--" FontSize="12" FontWeight="Bold" Foreground="#660085"/>
                                 </StackPanel>
                             </Grid>
 
@@ -362,20 +355,20 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                                    <TextBlock Text="SHADERY / POTOKI" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
-                                    <TextBlock x:Name="txtLiveShaders" Text="0" FontSize="12" FontWeight="Bold" Foreground="#E2B714"/>
+                                    <TextBlock Text="SHADERY / POTOKI" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveShaders" Text="0" FontSize="12" FontWeight="Bold" Foreground="#995500"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="WARN / BŁĘDY" FontSize="9" FontWeight="Bold" Foreground="#64748B"/>
-                                    <TextBlock x:Name="txtLiveErrors" Text="0 / 0" FontSize="12" FontWeight="Bold" Foreground="#94A3B8"/>
+                                    <TextBlock Text="WARN / BŁĘDY" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveErrors" Text="0 / 0" FontSize="12" FontWeight="Bold" Foreground="#333333"/>
                                 </StackPanel>
                             </Grid>
 
                             <TextBox x:Name="txtLiveLog" Grid.Row="3"
                                      IsReadOnly="True"
-                                     Background="#07080F"
-                                     Foreground="#CBD5E1"
-                                     BorderBrush="#1B1E30"
+                                     Background="#FFFDF5"
+                                     Foreground="#111111"
+                                     BorderBrush="#660085"
                                      BorderThickness="1"
                                      FontFamily="Consolas"
                                      FontSize="10"
@@ -404,13 +397,12 @@
                                 Background="{StaticResource LaunchButtonGradient}"
                                 BorderBrush="#00FF00"
                                 BorderThickness="3"
-                                CornerRadius="5"
-                                Effect="{StaticResource SoftShadow}">
+                                CornerRadius="5">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock Text="▶" FontSize="26" Foreground="#FFFFFF" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="ODPAL GTA VI" FontSize="20" FontWeight="Black" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="kripusek.top • Uruchom Grand Theft Auto VI" FontSize="11" Foreground="#FAEBD7"/>
+                                    <TextBlock Text="kripusek.top • Uruchom Grand Theft Auto VI" FontSize="11" Foreground="#FFFFFF"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -426,8 +418,8 @@
                 </Button.Template>
             </Button>
 
-            <Border Grid.Column="1" Height="68" Background="#222222" BorderBrush="#B700FF" BorderThickness="3" CornerRadius="5" Padding="14,0" Margin="0,0,12,0">
-                <CheckBox x:Name="chkSkipMovie" Content="Skip Movie / Intro" IsChecked="False" Foreground="#FAEBD7" FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Cursor="Hand" ToolTip="Auto-FastBoot/SkipCutscenes dla ScarlettPort oraz automatyczne wysyłanie Enter do okna gry przez pierwsze 120s dla pozostałych portów"/>
+            <Border Grid.Column="1" Height="68" Background="#00B7FF" BorderBrush="#660085" BorderThickness="3" CornerRadius="5" Padding="14,0" Margin="0,0,12,0">
+                <CheckBox x:Name="chkSkipMovie" Content="Skip Movie / Intro" IsChecked="False" Foreground="#111111" FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Cursor="Hand" ToolTip="Auto-FastBoot/SkipCutscenes dla ScarlettPort oraz automatyczne wysyłanie Enter do okna gry przez pierwsze 120s dla pozostałych portów"/>
             </Border>
 
             <Button x:Name="btnExit" Grid.Column="2" Width="100" Height="68" Content="WYJŚCIE" Style="{StaticResource ActionButtonStyle}" FontSize="14" FontWeight="Bold"/>
