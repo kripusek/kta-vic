@@ -1,4 +1,4 @@
-﻿Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+﻿Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Microsoft.VisualBasic
 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -172,86 +172,10 @@
             <Border Grid.Column="0" Background="#EFEBD6" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="18" Margin="0,0,12,0">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Orientation="Vertical">
-                        <TextBlock Text="✅ PORTY GTA VI (WYBIERZ PROFIL)" FontSize="13" FontWeight="Bold" Foreground="#660085" Margin="0,0,0,10"/>
+                        <TextBlock Text="✅ PROFIL URUCHOMIENIA" FontSize="13" FontWeight="Bold" Foreground="#660085" Margin="0,0,0,10"/>
 
-                        <!-- Preset 1: CGBJ / cool_fox -->
-                        <RadioButton x:Name="optCgbj" Style="{StaticResource PresetCardStyle}" IsChecked="True">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🦊" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="CGBJ / cool_fox (pareto-residency + OWN_UPSCALER=1)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Sprawdzony na RTX 3060 Ti: ~10 FPS + własny upscaler gry (bez crasha FSR4)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#00FF00" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="NAJLEPSZY" FontSize="9" FontWeight="Black" Foreground="#111111"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 2: ToLIManl/VIctory-Hydra -->
-                        <RadioButton x:Name="optHydra" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🐉" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="VIctory-Hydra (Series S • ~18-20 FPS / 37-40 z FG)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Zunifikowany fork cool_fox/VIctory (PORT_DESCRIPTORS/GUARD=1, AUTO_A=90, F1/F3)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#00B7FF" BorderBrush="#660085" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="HYDRA" FontSize="9" FontWeight="Black" Foreground="#111111"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 3: Androtim/MiniVI (8 GB VRAM) -->
-                        <RadioButton x:Name="optMinivi" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="💾" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="MiniVI (Dedykowany 8 GB VRAM • Series S • DLSS)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Preset balanced-720p + limit VRAM DXGI + mip tiling + DLSS Quality + FSR3 FG pod F1" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#00FF00" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="8GB VRAM" FontSize="9" FontWeight="Black" Foreground="#111111"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 4: kitty-core/Kitty6 -->
-                        <RadioButton x:Name="optKitty6" Style="{StaticResource PresetCardStyle}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🐱" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Kitty6 (Kitty Runtime • Series S • 20-30 FPS)" FontSize="14" FontWeight="Bold" Foreground="#111111"/>
-                                    <TextBlock Text="Publiczne repo Kitty Runtime na foxhound (mody .k6mod, panel F3, bez długiego prepare)" FontSize="11" Foreground="#333333" Margin="0,2,0,0"/>
-                                </StackPanel>
-                                <Border Grid.Column="2" Background="#FA017D" BorderBrush="#111111" BorderThickness="1" CornerRadius="4" Padding="6,3" VerticalAlignment="Center">
-                                    <TextBlock Text="KITTY6" FontSize="9" FontWeight="Black" Foreground="#FFFFFF"/>
-                                </Border>
-                            </Grid>
-                        </RadioButton>
-
-                        <!-- Preset 5: VIctory-NVIDIA-RT rt-test-11 (da309b8) -->
-                        <RadioButton x:Name="optNvidiaRt" Style="{StaticResource PresetCardStyle}">
+                        <!-- Preset 1: VIctory-NVIDIA-RT rt-test-11 (da309b8) -->
+                        <RadioButton x:Name="optNvidiaRt" Style="{StaticResource PresetCardStyle}" IsChecked="True">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -319,10 +243,11 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Real-Time Live Game Analyzer -->
+                    <!-- Real-Time Live Resource Monitor -->
                     <Border Grid.Row="3" Background="#F5F5DC" BorderBrush="#660085" BorderThickness="2" CornerRadius="5" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -330,7 +255,7 @@
                             </Grid.RowDefinitions>
 
                             <Grid Grid.Row="0" Margin="0,0,0,6">
-                                <TextBlock Text="📊 ANALIZATOR GRY NA ŻYWO" FontSize="11" FontWeight="Bold" Foreground="#660085" HorizontalAlignment="Left"/>
+                                <TextBlock Text="📊 MONITOR ZASOBÓW NA ŻYWO" FontSize="11" FontWeight="Bold" Foreground="#660085" HorizontalAlignment="Left"/>
                                 <TextBlock x:Name="txtLiveStage" Text="⏸ Oczekiwanie na start" FontSize="11" FontWeight="Bold" Foreground="#333333" HorizontalAlignment="Right"/>
                             </Grid>
 
@@ -344,12 +269,27 @@
                                     <TextBlock x:Name="txtLiveFps" Text="--" FontSize="12" FontWeight="Bold" Foreground="#007700"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="RAM PROCESU" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
-                                    <TextBlock x:Name="txtLiveRam" Text="--" FontSize="12" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock Text="CPU GRY" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveCpu" Text="--" FontSize="12" FontWeight="Bold" Foreground="#0055AA"/>
                                 </StackPanel>
                             </Grid>
 
                             <Grid Grid.Row="2" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                    <TextBlock Text="RAM PROCESU / WOLNE" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveRam" Text="--" FontSize="12" FontWeight="Bold" Foreground="#660085"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="VRAM DEDYKOWANY" FontSize="9" FontWeight="Bold" Foreground="#660085"/>
+                                    <TextBlock x:Name="txtLiveVram" Text="--" FontSize="12" FontWeight="Bold" Foreground="#990066"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Grid.Row="3" Margin="0,0,0,6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="*"/>
@@ -364,7 +304,7 @@
                                 </StackPanel>
                             </Grid>
 
-                            <TextBox x:Name="txtLiveLog" Grid.Row="3"
+                            <TextBox x:Name="txtLiveLog" Grid.Row="4"
                                      IsReadOnly="True"
                                      Background="#FFFDF5"
                                      Foreground="#111111"
@@ -433,10 +373,6 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
-$optCgbj = $window.FindName("optCgbj")
-$optHydra = $window.FindName("optHydra")
-$optMinivi = $window.FindName("optMinivi")
-$optKitty6 = $window.FindName("optKitty6")
 $optNvidiaRt = $window.FindName("optNvidiaRt")
 
 $chkClzero = $window.FindName("chkClzero")
@@ -456,7 +392,9 @@ $btnExit = $window.FindName("btnExit")
 $txtToolStatus = $window.FindName("txtToolStatus")
 $txtLiveStage = $window.FindName("txtLiveStage")
 $txtLiveFps = $window.FindName("txtLiveFps")
+$txtLiveCpu = $window.FindName("txtLiveCpu")
 $txtLiveRam = $window.FindName("txtLiveRam")
+$txtLiveVram = $window.FindName("txtLiveVram")
 $txtLiveShaders = $window.FindName("txtLiveShaders")
 $txtLiveErrors = $window.FindName("txtLiveErrors")
 $txtLiveLog = $window.FindName("txtLiveLog")
@@ -474,18 +412,6 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $gameDir = Join-Path $root 'GTA6.Xbox.v1.0.2.1-CYBERLEEK'
 $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
-$cgbjDir = Join-Path $root 'victory-cgbj'
-$cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
-$cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
-$hydraDir = Join-Path $root 'victory-hydra'
-$hydraExe = Join-Path $hydraDir 'target\release\victory.exe'
-$hydraCmd = Join-Path $hydraDir 'Play-VIctory.cmd'
-$miniviDir = Join-Path $root 'victory-minivi'
-$miniviExe = Join-Path $miniviDir 'target\release\victory.exe'
-$miniviScript = Join-Path $miniviDir 'scripts\play-minivi.ps1'
-$kitty6Dir = Join-Path $root 'victory-kitty6'
-$kitty6Exe = Join-Path $kitty6Dir 'target\release\victory.exe'
-$kitty6Script = Join-Path $kitty6Dir 'scripts\kitty6.ps1'
 $nvidiaRtDir = Join-Path $root 'victory-nvidia-rt'
 $nvidiaRtExe = Join-Path $nvidiaRtDir 'target\release\victory.exe'
 $nvidiaRtScript = Join-Path $nvidiaRtDir 'scripts\play-foxhound.ps1'
@@ -552,48 +478,7 @@ function Get-LaunchPlan {
         VICTORY_GPU_TIMING = $null
     }
 
-    if ($optCgbj.IsChecked) {
-        Require-File $cgbjExe
-        Require-File $cgbjCmd
-        $profile = 'CGBJ / cool_fox (pareto-residency)'
-        $exe = $env:ComSpec
-        $workDir = $cgbjDir
-        $environment.VICTORY_GAME_DIR = $gameDir
-        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
-        $environment.VICTORY_OWN_UPSCALER = '1'
-        $arguments = @('/c', $cgbjCmd, 'pareto-residency')
-    } elseif ($optHydra.IsChecked) {
-        Require-File $hydraExe
-        Require-File $hydraCmd
-        $profile = 'ToLIManl/VIctory-Hydra (Series S)'
-        $exe = $env:ComSpec
-        $workDir = $hydraDir
-        $environment.VICTORY_GAME_DIR = $gameDir
-        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-hydra'
-        $environment.VICTORY_STREAMLINE_DIR = Join-Path $nvidiaRtDir 'nvidia-sdk\Streamline\bin\x64'
-        $environment.VICTORY_FIDELITYFX_DIR = Join-Path $nvidiaRtDir 'amd-sdk\FidelityFX\bin'
-        $arguments = @('/c', $hydraCmd)
-    } elseif ($optMinivi.IsChecked) {
-        Require-File $miniviExe
-        Require-File $miniviScript
-        $profile = 'Androtim/MiniVI (8 GB VRAM • Series S)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $workDir = $miniviDir
-        $environment.VICTORY_STREAMLINE_DIR = Join-Path $nvidiaRtDir 'nvidia-sdk\Streamline\bin\x64'
-        $environment.VICTORY_FIDELITYFX_DIR = Join-Path $nvidiaRtDir 'amd-sdk\FidelityFX\bin'
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $miniviScript,
-            '-Exe', $gameExe, '-Preset', 'balanced-720p', '-Console', 'series-s',
-            '-Dlss', 'quality', '-FrameGen', 'off', '-FrameGenType', 'fsr3', '-Build', 'release', '-NoSmoothMotion')
-        if ($chkSkipMovie.IsChecked) { $arguments += '-SkipBink' }
-    } elseif ($optKitty6.IsChecked) {
-        Require-File $kitty6Exe
-        Require-File $kitty6Script
-        $profile = 'kitty-core/Kitty6 (Series S)'
-        $exe = Join-Path $PSHOME 'powershell.exe'
-        $workDir = $kitty6Dir
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $kitty6Script,
-            '-Exe', $gameExe, '-Build', 'release')
-    } elseif ($optNvidiaRt.IsChecked) {
+    if ($optNvidiaRt.IsChecked) {
         Require-File $nvidiaRtExe
         Require-File $nvidiaRtScript
         $profile = 'VIctory-NVIDIA-RT rt-test-11 (da309b8 • 1080to1440 + DLSS Balanced)'
@@ -616,9 +501,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optCgbj, $optHydra, $optMinivi, $optKitty6, $optNvidiaRt)) {
-    $preset.Add_Checked($refreshEngineOptions)
-}
+$optNvidiaRt.Add_Checked($refreshEngineOptions)
 & $refreshEngineOptions
 
 $liveState = @{
@@ -633,6 +516,11 @@ $liveState = @{
 function Reset-LiveAnalyzer($ProfileName) {
     $liveState.StdOutPos = 0L
     $liveState.StdErrPos = 0L
+    $liveState.RtLogPath = $null
+    $liveState.RtLogPos = 0L
+    $liveState.LastCpuTime = $null
+    $liveState.LastCpuSample = $null
+    $liveState.TickCount = 0
     $liveState.Shaders = 0
     $liveState.Warnings = 0
     $liveState.Errors = 0
@@ -640,12 +528,14 @@ function Reset-LiveAnalyzer($ProfileName) {
     $liveState.LastSkipSent = [DateTime]::MinValue
     $liveState.Lines.Clear()
     $txtLiveStage.Text = "⏳ Inicjalizacja ($ProfileName)..."
-    $txtLiveStage.Foreground = '#00F0FF'
+    $txtLiveStage.Foreground = '#660085'
     $txtLiveFps.Text = '--'
+    $txtLiveCpu.Text = '--'
     $txtLiveRam.Text = '--'
+    $txtLiveVram.Text = '--'
     $txtLiveShaders.Text = '0'
     $txtLiveErrors.Text = '0 / 0'
-    $txtLiveErrors.Foreground = '#94A3B8'
+    $txtLiveErrors.Foreground = '#333333'
     $txtLiveLog.Text = "Uruchomiono $ProfileName. Oczekiwanie na zdarzenia..."
 }
 
@@ -680,13 +570,45 @@ public static class KripusWin32 {
 '@
 }
 
+$script:compInfo = New-Object Microsoft.VisualBasic.Devices.ComputerInfo
+
 function Update-LiveAnalyzer {
-    $proc = Get-Process -Name victory, scarlett -ErrorAction SilentlyContinue | Select-Object -First 1
+    $liveState.TickCount++
+    $proc = Get-Process -Name victory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($proc) {
         $gb = [math]::Round($proc.WorkingSet64 / 1GB, 2)
-        $txtLiveRam.Text = "$gb GB"
+        $freeGb = [math]::Round($script:compInfo.AvailablePhysicalMemory / 1GB, 1)
+        $txtLiveRam.Text = "$gb GB (wolne $freeGb GB)"
+
+        $nowCpu = [DateTime]::UtcNow
+        $curCpu = $proc.TotalProcessorTime
+        if ($liveState.LastCpuTime -and $liveState.LastCpuSample) {
+            $dtMs = ($nowCpu - $liveState.LastCpuSample).TotalMilliseconds
+            if ($dtMs -gt 100) {
+                $dCpuMs = ($curCpu - $liveState.LastCpuTime).TotalMilliseconds
+                $pct = [math]::Min(100.0, [math]::Round(($dCpuMs / ($dtMs * [Environment]::ProcessorCount)) * 100.0, 1))
+                $txtLiveCpu.Text = "$pct %"
+            }
+        }
+        $liveState.LastCpuTime = $curCpu
+        $liveState.LastCpuSample = $nowCpu
+
+        if (($liveState.TickCount % 2) -eq 0) {
+            try {
+                $cat = New-Object System.Diagnostics.PerformanceCounterCategory('GPU Process Memory')
+                $inst = $cat.GetInstanceNames() | Where-Object { $_ -like "pid_$($proc.Id)_*" } | Select-Object -First 1
+                if ($inst) {
+                    $pc = New-Object System.Diagnostics.PerformanceCounter('GPU Process Memory', 'Dedicated Usage', $inst, $true)
+                    $vramGb = [math]::Round($pc.NextValue() / 1GB, 2)
+                    $pc.Dispose()
+                    $txtLiveVram.Text = "$vramGb / 8.0 GB"
+                }
+            } catch {}
+        }
     } elseif (-not $jobs.ContainsKey('game')) {
         $txtLiveRam.Text = '--'
+        $txtLiveCpu.Text = '--'
+        $txtLiveVram.Text = '--'
     }
 
     $job = $jobs['game']
@@ -714,6 +636,20 @@ function Update-LiveAnalyzer {
         $posErr = $liveState.StdErrPos
         $newLines += Read-NewLogLines $job.StdErr ([ref]$posErr)
         $liveState.StdErrPos = $posErr
+    }
+    if (-not $liveState.RtLogPath) {
+        $rtDir = Join-Path $env:LOCALAPPDATA 'victory\logs'
+        if (Test-Path -LiteralPath $rtDir) {
+            $cand = Get-ChildItem -LiteralPath $rtDir -Filter '*.log' -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTimeUtc -ge $liveState.StartedAt.AddSeconds(-2) } |
+                Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            if ($cand) { $liveState.RtLogPath = $cand.FullName }
+        }
+    }
+    if ($liveState.RtLogPath) {
+        $posRt = $liveState.RtLogPos
+        $newLines += Read-NewLogLines $liveState.RtLogPath ([ref]$posRt)
+        $liveState.RtLogPos = $posRt
     }
 
     if ($newLines.Count -eq 0) { return }
@@ -866,11 +802,6 @@ $btnClearCache.Add_Click({
 $btnCheckStatus.Add_Click({
     $checks = [ordered]@{
         'Plik gry' = $gameExe
-        'CGBJ / cool_fox' = $cgbjExe
-        'Skrypt CGBJ' = $cgbjCmd
-        'VIctory-Hydra' = $hydraExe
-        'MiniVI (8 GB)' = $miniviExe
-        'Kitty6' = $kitty6Exe
         'VIctory-NVIDIA-RT rt-test-11' = $nvidiaRtExe
         'Skrypt play-foxhound.ps1' = $nvidiaRtScript
         'Skrypt Steam' = $steamScript
