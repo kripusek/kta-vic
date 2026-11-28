@@ -3,49 +3,31 @@
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="KRIPUS LAUNCHER — Grand Theft Auto VI (VI Causeway)"
+        Title="kripusek.top — GTA VI Launcher"
         Height="840" Width="1100"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
-        Background="#0A0B12"
-        Foreground="#ECEFF4"
+        Background="#F5F5DC"
+        Foreground="#FAEBD7"
         FontFamily="Segoe UI, Segoe UI Variable, sans-serif">
     
     <Window.Resources>
-        <!-- Vice City Cyberpunk Gradients & Colors -->
-        <LinearGradientBrush x:Key="ViceGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#00F0FF" Offset="0.0"/>
-            <GradientStop Color="#7928CA" Offset="0.5"/>
-            <GradientStop Color="#FF007F" Offset="1.0"/>
-        </LinearGradientBrush>
-
-        <LinearGradientBrush x:Key="CardGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#161826" Offset="0.0"/>
-            <GradientStop Color="#10111D" Offset="1.0"/>
-        </LinearGradientBrush>
-
-        <LinearGradientBrush x:Key="CardHoverGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#202338" Offset="0.0"/>
-            <GradientStop Color="#18192B" Offset="1.0"/>
-        </LinearGradientBrush>
-
-        <LinearGradientBrush x:Key="LaunchButtonGradient" StartPoint="0,0" EndPoint="1,0">
-            <GradientStop Color="#FF007F" Offset="0.0"/>
-            <GradientStop Color="#9B00E8" Offset="0.6"/>
-            <GradientStop Color="#00F0FF" Offset="1.0"/>
-        </LinearGradientBrush>
+        <!-- kripusek.top Palette -->
+        <SolidColorBrush x:Key="CardGradient" Color="#2A2A2A"/>
+        <SolidColorBrush x:Key="CardHoverGradient" Color="#363636"/>
+        <SolidColorBrush x:Key="LaunchButtonGradient" Color="#FA017D"/>
 
         <!-- Drop Shadows -->
-        <DropShadowEffect x:Key="GlowCyan" Color="#00F0FF" BlurRadius="20" ShadowDepth="0" Opacity="0.45"/>
-        <DropShadowEffect x:Key="GlowPink" Color="#FF007F" BlurRadius="25" ShadowDepth="0" Opacity="0.55"/>
-        <DropShadowEffect x:Key="SoftShadow" Color="#000000" BlurRadius="15" ShadowDepth="4" Opacity="0.6"/>
+        <DropShadowEffect x:Key="GlowCyan" Color="#00FFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.5"/>
+        <DropShadowEffect x:Key="GlowPink" Color="#FA017D" BlurRadius="16" ShadowDepth="0" Opacity="0.5"/>
+        <DropShadowEffect x:Key="SoftShadow" Color="#000000" BlurRadius="10" ShadowDepth="3" Opacity="0.45"/>
 
-        <!-- Custom Card RadioButton Style -->
+        <!-- Custom Card RadioButton Style (.post-card + .button accent) -->
         <Style x:Key="PresetCardStyle" TargetType="RadioButton">
             <Setter Property="Background" Value="{StaticResource CardGradient}"/>
-            <Setter Property="BorderBrush" Value="#25283E"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#ECEFF4"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Foreground" Value="#FAEBD7"/>
             <Setter Property="Margin" Value="0,0,0,10"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -55,7 +37,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="10"
+                                CornerRadius="8"
                                 Padding="16,12"
                                 Effect="{StaticResource SoftShadow}">
                             <ContentPresenter />
@@ -63,13 +45,12 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="{StaticResource CardHoverGradient}"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#00F0FF"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#00FFFF"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#FF007F"/>
-                                <Setter TargetName="border" Property="BorderThickness" Value="1.8"/>
-                                <Setter TargetName="border" Property="Effect" Value="{StaticResource GlowPink}"/>
-                                <Setter TargetName="border" Property="Background" Value="#1C182F"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#00FF00"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="3"/>
+                                <Setter TargetName="border" Property="Background" Value="#660085"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -77,15 +58,15 @@
             </Setter>
         </Style>
 
-        <!-- Action Button Style -->
+        <!-- Action Button Style (kripusek.top .button2) -->
         <Style x:Key="ActionButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="#181A2A"/>
-            <Setter Property="BorderBrush" Value="#2D3150"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#E2E8F0"/>
+            <Setter Property="Background" Value="#DF1FDF"/>
+            <Setter Property="BorderBrush" Value="#B700FF"/>
+            <Setter Property="BorderThickness" Value="3"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="14,9"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -94,17 +75,16 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8"
+                                CornerRadius="5"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="btnBorder" Property="BorderBrush" Value="#00F0FF"/>
-                                <Setter TargetName="btnBorder" Property="Background" Value="#22253B"/>
+                                <Setter TargetName="btnBorder" Property="Background" Value="#007185"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="btnBorder" Property="Background" Value="#141624"/>
+                                <Setter TargetName="btnBorder" Property="Background" Value="#004F5E"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -121,43 +101,42 @@
             <RowDefinition Height="Auto"/> <!-- Action Bar / Big Button -->
         </Grid.RowDefinitions>
 
-        <!-- 1. Header -->
+        <!-- 1. Header (kripusek.top .logo style) -->
         <Grid Grid.Row="0" Margin="0,0,0,14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <StackPanel Orientation="Vertical">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="⚡ KRIPUS" FontSize="26" FontWeight="Black" Foreground="#FF007F"/>
-                    <TextBlock Text=" LAUNCHER" FontSize="26" FontWeight="Black" Foreground="#00F0FF"/>
-                    <Border Background="#251336" CornerRadius="4" Margin="14,0,0,0" Padding="8,2" VerticalAlignment="Center" BorderBrush="#FF007F" BorderThickness="1">
-                        <TextBlock Text="GTA VI • VI CAUSEWAY" FontSize="11" FontWeight="Bold" Foreground="#FF80DF"/>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Background="#660085" Padding="3" CornerRadius="4" Effect="{StaticResource SoftShadow}">
+                    <Border Background="#00FFFF" BorderBrush="#660085" BorderThickness="2" CornerRadius="2" Padding="18,6">
+                        <TextBlock Text="Kripusek.top • GTA VI" FontSize="24" FontWeight="Black" Foreground="#111111"/>
                     </Border>
-                </StackPanel>
-                <TextBlock Text="Xbox Scarlett Compatibility Recompiler • PC Direct3D 12 Edition"
-                           FontSize="13" Foreground="#8A92B2" Margin="0,4,0,0"/>
+                </Border>
+                <Border Background="#222222" CornerRadius="6" Margin="14,0,0,0" Padding="10,5" VerticalAlignment="Center" BorderBrush="#660085" BorderThickness="2">
+                    <TextBlock Text="VI CAUSEWAY LAUNCHER" FontSize="12" FontWeight="Bold" Foreground="#FF4FD9"/>
+                </Border>
             </StackPanel>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#121320" BorderBrush="#25283E" BorderThickness="1" CornerRadius="8" Padding="12,6" Margin="0,0,8,0">
+                <Border Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="8" Padding="12,6" Margin="0,0,8,0">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🎮 GRA: " FontWeight="Bold" Foreground="#8A92B2" FontSize="12"/>
-                        <TextBlock Text="GTA VI 1.0.2.1" FontWeight="Bold" Foreground="#38EF7D" FontSize="12"/>
+                        <TextBlock Text="🎮 GRA: " FontWeight="Bold" Foreground="#FAEBD7" FontSize="12"/>
+                        <TextBlock Text="GTA VI 1.0.2.1" FontWeight="Bold" Foreground="#00FF00" FontSize="12"/>
                     </StackPanel>
                 </Border>
-                <Border Background="#121320" BorderBrush="#25283E" BorderThickness="1" CornerRadius="8" Padding="12,6">
+                <Border Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="8" Padding="12,6">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="👤 USER: " FontWeight="Bold" Foreground="#8A92B2" FontSize="12"/>
-                        <TextBlock Text="kripusek" FontWeight="Bold" Foreground="#00F0FF" FontSize="12"/>
+                        <TextBlock Text="👤 USER: " FontWeight="Bold" Foreground="#FAEBD7" FontSize="12"/>
+                        <TextBlock Text="kripusek" FontWeight="Bold" Foreground="#00FFFF" FontSize="12"/>
                     </StackPanel>
                 </Border>
             </StackPanel>
         </Grid>
 
-        <!-- 2. System Status Bar -->
-        <Border Grid.Row="1" Background="#11121E" BorderBrush="#1F2236" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,18">
+        <!-- 2. System Status Bar (.post-card) -->
+        <Border Grid.Row="1" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="14,10" Margin="0,0,0,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -195,11 +174,11 @@
                 <ColumnDefinition Width="*"/>    <!-- Options & Log Preview -->
             </Grid.ColumnDefinitions>
 
-            <!-- Presets Section -->
-            <Border Grid.Column="0" Background="#0E101B" BorderBrush="#1E2033" BorderThickness="1" CornerRadius="12" Padding="18" Margin="0,0,12,0">
+            <!-- Presets Section (.post-card) -->
+            <Border Grid.Column="0" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="18" Margin="0,0,12,0">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Orientation="Vertical">
-                        <TextBlock Text="✅ DZIAŁAJĄCE GRAFICZNIE (OŚWIETLONY ŚWIAT / 3D)" FontSize="13" FontWeight="Bold" Foreground="#38EF7D" Margin="0,0,0,10"/>
+                        <TextBlock Text="✅ PORTY GTA VI (WYBIERZ PROFIL)" FontSize="13" FontWeight="Bold" Foreground="#FF4FD9" Margin="0,0,0,10"/>
 
                         <!-- Preset 0 (Working): CGBJ pareto-residency + OWN_UPSCALER -->
                         <!-- Preset 1: CGBJ / cool_fox (ONLY KEPT) -->
@@ -301,8 +280,8 @@
                 </ScrollViewer>
             </Border>
 
-            <!-- Tweaks & Diagnostics Section -->
-            <Border Grid.Column="1" Background="#0E101B" BorderBrush="#1E2033" BorderThickness="1" CornerRadius="12" Padding="18">
+            <!-- Tweaks & Diagnostics Section (.post-card) -->
+            <Border Grid.Column="1" Background="#222222" BorderBrush="#660085" BorderThickness="2" CornerRadius="10" Padding="18">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -311,7 +290,7 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="OPCJE SILNIKA I GRAFIKI" FontSize="14" FontWeight="Bold" Foreground="#FF007F" Margin="0,0,0,12"/>
+                    <TextBlock Grid.Row="0" Text="OPCJE SILNIKA I GRAFIKI" FontSize="14" FontWeight="Bold" Foreground="#FF4FD9" Margin="0,0,0,12"/>
 
                     <StackPanel Grid.Row="1" Margin="0,0,0,12">
                         <CheckBox x:Name="chkClzero" Content="Aktywne buforowanie CLZERO (Wysoki FPS + Ochrona RAM)" IsChecked="True" Foreground="#CBD5E1" Margin="0,0,0,8" Cursor="Hand"/>
@@ -423,31 +402,32 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="launchBorder"
                                 Background="{StaticResource LaunchButtonGradient}"
-                                CornerRadius="12"
-                                Effect="{StaticResource GlowPink}">
+                                BorderBrush="#00FF00"
+                                BorderThickness="3"
+                                CornerRadius="5"
+                                Effect="{StaticResource SoftShadow}">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock Text="▶" FontSize="26" Foreground="#FFFFFF" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="ODPAL GTA VI" FontSize="20" FontWeight="Black" Foreground="#FFFFFF"/>
-                                    <TextBlock Text="Uruchom Grand Theft Auto VI przez VI Causeway" FontSize="11" Foreground="#FDF2F8"/>
+                                    <TextBlock Text="kripusek.top • Uruchom Grand Theft Auto VI" FontSize="11" Foreground="#FAEBD7"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="launchBorder" Property="Effect" Value="{StaticResource GlowCyan}"/>
-                                <Setter TargetName="launchBorder" Property="Opacity" Value="0.95"/>
+                                <Setter TargetName="launchBorder" Property="Background" Value="#660085"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="launchBorder" Property="Opacity" Value="0.8"/>
+                                <Setter TargetName="launchBorder" Property="Opacity" Value="0.85"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
             </Button>
 
-            <Border Grid.Column="1" Height="68" Background="#0E101B" BorderBrush="#1E2033" BorderThickness="1" CornerRadius="12" Padding="14,0" Margin="0,0,12,0">
-                <CheckBox x:Name="chkSkipMovie" Content="Skip Movie / Intro" IsChecked="False" Foreground="#CBD5E1" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Cursor="Hand" ToolTip="Auto-FastBoot/SkipCutscenes dla ScarlettPort oraz automatyczne wysyłanie Enter do okna gry przez pierwsze 120s dla pozostałych portów"/>
+            <Border Grid.Column="1" Height="68" Background="#222222" BorderBrush="#B700FF" BorderThickness="3" CornerRadius="5" Padding="14,0" Margin="0,0,12,0">
+                <CheckBox x:Name="chkSkipMovie" Content="Skip Movie / Intro" IsChecked="False" Foreground="#FAEBD7" FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Cursor="Hand" ToolTip="Auto-FastBoot/SkipCutscenes dla ScarlettPort oraz automatyczne wysyłanie Enter do okna gry przez pierwsze 120s dla pozostałych portów"/>
             </Border>
 
             <Button x:Name="btnExit" Grid.Column="2" Width="100" Height="68" Content="WYJŚCIE" Style="{StaticResource ActionButtonStyle}" FontSize="14" FontWeight="Bold"/>
