@@ -221,7 +221,64 @@
                             </Grid>
                         </RadioButton>
 
-                        <!-- Preset 2: VIctory-NVIDIA-RT rt-test-11 (da309b8) -->
+                        <!-- Preset 2: ToLIManl/VIctory-Hydra -->
+                        <RadioButton x:Name="optHydra" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🐉" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="VIctory-Hydra (Series S • ~18-20 FPS / 37-40 z FG)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Zunifikowany fork cool_fox/VIctory (PORT_DESCRIPTORS/GUARD=1, AUTO_A=90, F1/F3)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#1D294D" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="HYDRA" FontSize="9" FontWeight="Black" Foreground="#60A5FA"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 3: Androtim/MiniVI (8 GB VRAM) -->
+                        <RadioButton x:Name="optMinivi" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="💾" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="MiniVI (Dedykowany 8 GB VRAM • Series S • DLSS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Preset balanced-720p + limit VRAM DXGI + mip tiling + DLSS Quality + FSR3 FG pod F1" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#0C3423" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="8GB VRAM" FontSize="9" FontWeight="Black" Foreground="#38EF7D"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 4: kitty-core/Kitty6 -->
+                        <RadioButton x:Name="optKitty6" Style="{StaticResource PresetCardStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="🐱" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Kitty6 (Kitty Runtime • Series S • 20-30 FPS)" FontSize="14" FontWeight="Bold" Foreground="#FFFFFF"/>
+                                    <TextBlock Text="Publiczne repo Kitty Runtime na foxhound (mody .k6mod, panel F3, bez długiego prepare)" FontSize="11" Foreground="#94A3B8" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="2" Background="#3B1D2E" CornerRadius="6" Padding="6,3" VerticalAlignment="Center">
+                                    <TextBlock Text="KITTY6" FontSize="9" FontWeight="Black" Foreground="#F472B6"/>
+                                </Border>
+                            </Grid>
+                        </RadioButton>
+
+                        <!-- Preset 5: VIctory-NVIDIA-RT rt-test-11 (da309b8) -->
                         <RadioButton x:Name="optNvidiaRt" Style="{StaticResource PresetCardStyle}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -405,6 +462,9 @@ $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # Element References
 $optCgbj = $window.FindName("optCgbj")
+$optHydra = $window.FindName("optHydra")
+$optMinivi = $window.FindName("optMinivi")
+$optKitty6 = $window.FindName("optKitty6")
 $optNvidiaRt = $window.FindName("optNvidiaRt")
 
 $chkClzero = $window.FindName("chkClzero")
@@ -445,6 +505,15 @@ $gameExe = Join-Path $gameDir 'game_scarlett_master.exe'
 $cgbjDir = Join-Path $root 'victory-cgbj'
 $cgbjExe = Join-Path $cgbjDir 'target\release\victory.exe'
 $cgbjCmd = Join-Path $cgbjDir 'Play-VIctory.cmd'
+$hydraDir = Join-Path $root 'victory-hydra'
+$hydraExe = Join-Path $hydraDir 'target\release\victory.exe'
+$hydraCmd = Join-Path $hydraDir 'Play-VIctory.cmd'
+$miniviDir = Join-Path $root 'victory-minivi'
+$miniviExe = Join-Path $miniviDir 'target\release\victory.exe'
+$miniviScript = Join-Path $miniviDir 'scripts\play-minivi.ps1'
+$kitty6Dir = Join-Path $root 'victory-kitty6'
+$kitty6Exe = Join-Path $kitty6Dir 'target\release\victory.exe'
+$kitty6Script = Join-Path $kitty6Dir 'scripts\kitty6.ps1'
 $nvidiaRtDir = Join-Path $root 'victory-nvidia-rt'
 $nvidiaRtExe = Join-Path $nvidiaRtDir 'target\release\victory.exe'
 $nvidiaRtScript = Join-Path $nvidiaRtDir 'scripts\play-foxhound.ps1'
@@ -521,6 +590,37 @@ function Get-LaunchPlan {
         $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-cgbj'
         $environment.VICTORY_OWN_UPSCALER = '1'
         $arguments = @('/c', $cgbjCmd, 'pareto-residency')
+    } elseif ($optHydra.IsChecked) {
+        Require-File $hydraExe
+        Require-File $hydraCmd
+        $profile = 'ToLIManl/VIctory-Hydra (Series S)'
+        $exe = $env:ComSpec
+        $workDir = $hydraDir
+        $environment.VICTORY_GAME_DIR = $gameDir
+        $environment.VICTORY_CACHE_DIR = Join-Path $dataDir 'cache-hydra'
+        $environment.VICTORY_STREAMLINE_DIR = Join-Path $nvidiaRtDir 'nvidia-sdk\Streamline\bin\x64'
+        $environment.VICTORY_FIDELITYFX_DIR = Join-Path $nvidiaRtDir 'amd-sdk\FidelityFX\bin'
+        $arguments = @('/c', $hydraCmd)
+    } elseif ($optMinivi.IsChecked) {
+        Require-File $miniviExe
+        Require-File $miniviScript
+        $profile = 'Androtim/MiniVI (8 GB VRAM • Series S)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $miniviDir
+        $environment.VICTORY_STREAMLINE_DIR = Join-Path $nvidiaRtDir 'nvidia-sdk\Streamline\bin\x64'
+        $environment.VICTORY_FIDELITYFX_DIR = Join-Path $nvidiaRtDir 'amd-sdk\FidelityFX\bin'
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $miniviScript,
+            '-Exe', $gameExe, '-Preset', 'balanced-720p', '-Console', 'series-s',
+            '-Dlss', 'quality', '-FrameGen', 'off', '-FrameGenType', 'fsr3', '-Build', 'release', '-NoSmoothMotion')
+        if ($chkSkipMovie.IsChecked) { $arguments += '-SkipBink' }
+    } elseif ($optKitty6.IsChecked) {
+        Require-File $kitty6Exe
+        Require-File $kitty6Script
+        $profile = 'kitty-core/Kitty6 (Series S)'
+        $exe = Join-Path $PSHOME 'powershell.exe'
+        $workDir = $kitty6Dir
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $kitty6Script,
+            '-Exe', $gameExe, '-Build', 'release')
     } elseif ($optNvidiaRt.IsChecked) {
         Require-File $nvidiaRtExe
         Require-File $nvidiaRtScript
@@ -545,7 +645,7 @@ $refreshEngineOptions = {
     $chkMaxWorkers.IsEnabled = $false
     $chkDred.IsEnabled = $false
 }
-foreach ($preset in @($optCgbj, $optNvidiaRt)) {
+foreach ($preset in @($optCgbj, $optHydra, $optMinivi, $optKitty6, $optNvidiaRt)) {
     $preset.Add_Checked($refreshEngineOptions)
 }
 & $refreshEngineOptions
@@ -797,6 +897,9 @@ $btnCheckStatus.Add_Click({
         'Plik gry' = $gameExe
         'CGBJ / cool_fox' = $cgbjExe
         'Skrypt CGBJ' = $cgbjCmd
+        'VIctory-Hydra' = $hydraExe
+        'MiniVI (8 GB)' = $miniviExe
+        'Kitty6' = $kitty6Exe
         'VIctory-NVIDIA-RT rt-test-11' = $nvidiaRtExe
         'Skrypt play-foxhound.ps1' = $nvidiaRtScript
         'Skrypt Steam' = $steamScript
